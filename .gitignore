@@ -27,7 +27,7 @@ atalanta-core/fsim
 # Experiment outputs
 results/runs/*
 results/baseline/*
-llm_optimizer/experiments/*
+llm_optimizer/experiments/outputs/*
 
 # Keep directory placeholders
 !results/runs/.gitkeep

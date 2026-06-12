@@ -32,6 +32,34 @@ The first implementation should treat `atalanta-core` as a black-box ATPG backen
 
 After this loop is stable, the project can add controlled white-box optimization, such as modifying fault ordering, X-fill, D-frontier selection, backtrace heuristics, or compaction logic.
 
+## Baseline Evaluation Loop
+
+The initial black-box evaluation loop is implemented in `llm_optimizer/`.
+
+Run the default baseline set:
+
+```bash
+python3 llm_optimizer/experiments/run_baseline.py
+```
+
+Useful options:
+
+```bash
+python3 llm_optimizer/experiments/run_baseline.py \
+  --benchmarks pcitc destc DMAtc \
+  --timeout-seconds 60
+```
+
+Each Atalanta run is isolated under `results/runs/<run_id>/` and keeps:
+
+- `stdout.txt` / `stderr.txt`
+- copied benchmark `.bench`
+- generated `.test`, `.vec`, and `.log` files when Atalanta produces them
+- `metadata.json`
+- `result.json`
+
+Baseline summaries are written under `results/baseline/`. Existing CSV files are never overwritten; a timestamped filename is created when needed.
+
 ## Notes
 
 - `atalanta-core/` should stay close to the original Atalanta source until the evaluation loop is reliable.
