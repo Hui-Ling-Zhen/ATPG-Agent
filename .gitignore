@@ -1,0 +1,35 @@
+.DS_Store
+*.o
+*.out
+*.log
+*.test
+*.vec
+*.ufaults
+*.atp
+*.pattern
+*.udb
+*.IAB
+*.IAD
+*.IMB
+*.IMD
+*.PFI
+*.PO
+*.PR
+*.PRI
+*.PS
+*.SearchResults
+*.WK3
+
+# Build outputs
+atalanta-core/atalanta
+atalanta-core/fsim
+
+# Experiment outputs
+results/runs/*
+results/baseline/*
+llm_optimizer/experiments/*
+
+# Keep directory placeholders
+!results/runs/.gitkeep
+!results/baseline/.gitkeep
+!llm_optimizer/experiments/.gitkeep

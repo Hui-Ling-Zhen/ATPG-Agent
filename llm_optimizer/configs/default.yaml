@@ -1,0 +1,9 @@
+project:
+  atalanta_core: ../../atalanta-core
+  benchmarks: ../../benchmarks
+  results: ../../results
+
+optimization:
+  mode: black_box
+  objective: coverage_runtime_pattern_count
+  max_iterations: 0
