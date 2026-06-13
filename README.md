@@ -114,6 +114,63 @@ python3 llm_optimizer/experiments/run_candidates.py \
   --trials 3
 ```
 
+## Comparison Experiment Summary
+
+This repository contains a completed comparison experiment for the LLM proposal in `results/proposals/proposal_20260613-215430.json`.
+
+The LLM proposal was evaluated on `pcitc`, `destc`, and `DMAtc` with three repeated trials per `(candidate, benchmark)` pair:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidates-json results/proposals/proposal_20260613-215430.json \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --output results/candidates/llm_proposal_results.csv
+```
+
+The complete run artifacts are preserved under `results/runs/<run_id>/`. The key result files are:
+
+- `results/candidates/llm_proposal_results.csv`
+- `results/baseline/default_repeated_baseline.csv`
+- `results/comparisons/llm_proposal/candidate_summary.csv`
+- `results/comparisons/llm_vs_repeated_default/candidate_summary.csv`
+- `results/comparisons/llm_vs_repeated_default/candidate_stats.csv`
+
+### LLM Proposal vs Original Baseline
+
+This comparison uses the earlier single-run baseline in `results/baseline/baseline_20260612-221054.csv`.
+
+| Candidate | Wins | Stable wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean |
+|---|---:|---:|---:|---:|---:|
+| `compaction_c1_learning` | 3 | 3 | +0.765 | -7.687 | +0.333 |
+| `phase1_b20_learning` | 3 | 3 | +0.462 | -4.480 | -1.444 |
+| `phase2_b5_learning` | 3 | 3 | +0.423 | -4.096 | -1.333 |
+| `phase2_b20_learning_seed1` | 2 | 2 | +0.180 | -1.563 | -2.333 |
+| `reverse_phase2_b10` | 1 | 1 | -0.220 | -10.396 | +126.000 |
+
+### LLM Proposal vs Repeated Default
+
+This comparison is more conservative: it uses `results/baseline/default_repeated_baseline.csv`, where default Atalanta was also run three times per benchmark.
+
+| Candidate | Wins | Stable wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean |
+|---|---:|---:|---:|---:|---:|
+| `compaction_c1_learning` | 2 | 1 | +0.039 | -0.668 | +2.778 |
+| `reverse_phase2_b10` | 1 | 1 | -0.947 | -3.378 | +128.444 |
+| `phase1_b20_learning` | 0 | 0 | -0.264 | +2.539 | +1.000 |
+| `phase2_b5_learning` | 0 | 0 | -0.303 | +2.922 | +1.111 |
+| `phase2_b20_learning_seed1` | 0 | 0 | -0.547 | +5.456 | +0.111 |
+
+The best LLM-generated candidate is `compaction_c1_learning` (`-c 1 -L`). It preserved coverage on all three benchmarks. Against the repeated default baseline, it was a stable win on `DMAtc`, a small non-stable win on `destc`, and slightly worse on `pcitc`.
+
+| Benchmark | Candidate | Coverage delta | Runtime delta (s) | Pattern delta | Score delta | Stable win |
+|---|---|---:|---:|---:|---:|---|
+| `DMAtc.bench` | `compaction_c1_learning` | 0.000 | -1.062 | +0.333 | +0.103 | yes |
+| `destc.bench` | `compaction_c1_learning` | 0.000 | -0.977 | +7.000 | +0.028 | no |
+| `pcitc.bench` | `compaction_c1_learning` | 0.000 | +0.034 | +1.000 | -0.013 | no |
+
+Summary: the LLM proposal produced a useful new local-search direction around compaction effort plus static learning. It does not yet prove a broad advantage over default Atalanta, but it does show that the LLM-assisted loop can identify a coverage-preserving configuration with benchmark-specific gains. The next step is to search locally around `-c 1 -L`, for example `-c 1/-c 2`, with and without `-B 5/-B 10`, using more trials.
+
 ## Notes
 
 - `atalanta-core/` should stay close to the original Atalanta source until the evaluation loop is reliable.
