@@ -60,6 +60,60 @@ Each Atalanta run is isolated under `results/runs/<run_id>/` and keeps:
 
 Baseline summaries are written under `results/baseline/`. Existing CSV files are never overwritten; a timestamped filename is created when needed.
 
+## Candidate Evaluation
+
+Run the built-in black-box candidate set:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --benchmarks pcitc destc DMAtc \
+  --candidate-limit 8 \
+  --trials 3 \
+  --timeout-seconds 75
+```
+
+Candidate summaries are written under `results/candidates/`, while every raw run is still preserved under `results/runs/<run_id>/`.
+
+Compare candidates against a baseline CSV:
+
+```bash
+PYTHONPATH="$(pwd)" python3 -m llm_optimizer.compare \
+  --baseline results/baseline/baseline_20260612-221054.csv \
+  --candidates results/candidates/candidate_results.csv
+```
+
+The comparison step writes:
+
+- `results/comparisons/candidate_comparison.csv`: per-candidate, per-benchmark deltas.
+- `results/comparisons/candidate_stats.csv`: repeated-trial mean/std statistics by `(candidate, benchmark)`.
+- `results/comparisons/candidate_summary.csv`: candidate-level win counts and average deltas.
+
+`llm_optimizer/agent.py` provides the LLM-facing proposal loop: build a prompt from baseline/candidate summaries, call an OpenAI-compatible chat endpoint, validate strict JSON candidate proposals, and save them for `run_candidates.py`.
+
+```bash
+export OPENAI_API_KEY=...
+PYTHONPATH="$(pwd)" python3 -m llm_optimizer.agent \
+  --candidate-summary results/comparisons/candidate_summary.csv \
+  --candidate-comparison results/comparisons/candidate_comparison.csv \
+  --max-candidates 5
+```
+
+If you already have an LLM response JSON, validate and save it without calling the API:
+
+```bash
+PYTHONPATH="$(pwd)" python3 -m llm_optimizer.agent \
+  --response-json results/proposals/assistant_llm_response.json
+```
+
+Then run the proposal:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidates-json results/proposals/proposal_<timestamp>.json \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3
+```
+
 ## Notes
 
 - `atalanta-core/` should stay close to the original Atalanta source until the evaluation loop is reliable.

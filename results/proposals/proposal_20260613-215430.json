@@ -1,0 +1,55 @@
+[
+  {
+    "name": "phase2_b5_learning",
+    "options": [
+      "-B",
+      "5",
+      "-L"
+    ],
+    "hypothesis": "phase2_b10 and static_learning both preserved coverage and improved score; try a smaller phase-2 limit with learning to reduce runtime while keeping the useful search behavior.",
+    "source": "llm"
+  },
+  {
+    "name": "compaction_c1_learning",
+    "options": [
+      "-c",
+      "1",
+      "-L"
+    ],
+    "hypothesis": "static_learning was stable, while compaction strategy affects runtime and pattern count; reduce shuffle compaction effort to test whether runtime improves without a large pattern penalty.",
+    "source": "llm"
+  },
+  {
+    "name": "phase2_b20_learning_seed1",
+    "options": [
+      "-B",
+      "20",
+      "-L",
+      "-s",
+      "1"
+    ],
+    "hypothesis": "phase2_b20 improved destc but was weaker on DMAtc; combine it with static learning and a fixed seed to test whether deeper retry search becomes more stable.",
+    "source": "llm"
+  },
+  {
+    "name": "phase1_b20_learning",
+    "options": [
+      "-b",
+      "20",
+      "-L"
+    ],
+    "hypothesis": "increase phase-1 FAN backtracking with static learning to see whether hard faults can be handled earlier without invoking phase-2 overhead.",
+    "source": "llm"
+  },
+  {
+    "name": "reverse_phase2_b10",
+    "options": [
+      "-c",
+      "0",
+      "-B",
+      "10"
+    ],
+    "hypothesis": "reverse-only compaction reduces runtime but increases patterns; combine it with moderate phase-2 search to test the runtime-pattern tradeoff under preserved coverage.",
+    "source": "llm"
+  }
+]
