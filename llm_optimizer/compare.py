@@ -65,6 +65,7 @@ STATS_FIELDS = (
     "baseline_score_mean",
     "score_delta_mean",
     "wins_benchmark",
+    "runtime_win",
     "stable_win",
 )
 SUMMARY_FIELDS = (
@@ -75,6 +76,7 @@ SUMMARY_FIELDS = (
     "timeout_rate_mean",
     "coverage_below_baseline_count",
     "wins",
+    "runtime_win_count",
     "stable_win_count",
     "average_score_delta_mean",
     "runtime_delta_mean",
@@ -295,6 +297,12 @@ def aggregate_repeated_trials(comparisons: list[dict[str, Any]]) -> list[dict[st
             and score_delta_mean is not None
             and score_delta_mean > 0
         )
+        runtime_win = bool(
+            successful
+            and not coverage_below
+            and runtime_delta_mean is not None
+            and runtime_delta_mean < 0
+        )
         stable_win = bool(
             successful
             and not coverage_below
@@ -333,6 +341,7 @@ def aggregate_repeated_trials(comparisons: list[dict[str, Any]]) -> list[dict[st
                 "baseline_score_mean": baseline_score,
                 "score_delta_mean": score_delta_mean,
                 "wins_benchmark": wins,
+                "runtime_win": runtime_win,
                 "stable_win": stable_win,
             }
         )
@@ -362,6 +371,7 @@ def summarize_stats(stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     1 for row in rows if bool(row.get("coverage_below_baseline"))
                 ),
                 "wins": sum(1 for row in rows if bool(row.get("wins_benchmark"))),
+                "runtime_win_count": sum(1 for row in rows if bool(row.get("runtime_win"))),
                 "stable_win_count": sum(1 for row in rows if bool(row.get("stable_win"))),
                 "average_score_delta_mean": _mean(
                     [float(row["score_delta_mean"]) for row in rows if row.get("score_delta_mean") is not None]
@@ -382,6 +392,7 @@ def summarize_stats(stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
     summary.sort(
         key=lambda row: (
+            int(row["runtime_win_count"]),
             int(row["stable_win_count"]),
             int(row["wins"]),
             float(row["average_score_delta_mean"] or -1e9),

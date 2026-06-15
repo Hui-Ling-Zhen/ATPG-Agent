@@ -16,6 +16,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from llm_optimizer.candidates import (  # noqa: E402
     CandidateConfig,
+    CANDIDATE_SETS,
+    get_candidate_set,
     get_default_candidates,
     load_candidates_json,
 )
@@ -153,6 +155,12 @@ def main() -> int:
         help="Limit the built-in candidate set for quick smoke tests.",
     )
     parser.add_argument(
+        "--candidate-set",
+        default="default",
+        choices=sorted(CANDIDATE_SETS),
+        help="Named built-in candidate set to run when --candidates-json is not provided.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_RESULTS_DIR / "candidates" / "candidate_results.csv",
@@ -174,6 +182,8 @@ def main() -> int:
 
     if args.candidates_json:
         candidates = load_candidates_json(args.candidates_json)
+    elif args.candidate_set != "default":
+        candidates = get_candidate_set(args.candidate_set, limit=args.candidate_limit)
     else:
         candidates = get_default_candidates(args.candidate_limit)
 

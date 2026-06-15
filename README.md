@@ -171,6 +171,68 @@ The best LLM-generated candidate is `compaction_c1_learning` (`-c 1 -L`). It pre
 
 Summary: the LLM proposal produced a useful new local-search direction around compaction effort plus static learning. It does not yet prove a broad advantage over default Atalanta, but it does show that the LLM-assisted loop can identify a coverage-preserving configuration with benchmark-specific gains. The next step is to search locally around `-c 1 -L`, for example `-c 1/-c 2`, with and without `-B 5/-B 10`, using more trials.
 
+### Runtime-First Local Search
+
+The runtime-focused search space is implemented as the built-in candidate set `compaction_runtime_local`. It expands around the best observed LLM candidate `compaction_c1_learning` and tests:
+
+- `-c 1` vs `-c 2`
+- with and without `-L`
+- with and without `-B 5` / `-B 10`
+
+Methodologically, this is a local search around the LLM-discovered direction: reduce the test compaction shuffle effort first, then ablate whether static learning or phase-2 FAN search is actually responsible for the runtime improvement.
+
+The full local-search experiment was run with three repeated trials per `(candidate, benchmark)` pair:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set compaction_runtime_local \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --output results/candidates/compaction_runtime_local_results.csv
+```
+
+The results were compared against the repeated default baseline:
+
+```bash
+PYTHONPATH="$(pwd)" python3 -m llm_optimizer.compare \
+  --baseline results/baseline/default_repeated_baseline.csv \
+  --candidates results/candidates/compaction_runtime_local_results.csv \
+  --output-dir results/comparisons/compaction_runtime_local
+```
+
+The key result files are:
+
+- `results/candidates/compaction_runtime_local_results.csv`
+- `results/comparisons/compaction_runtime_local/candidate_summary.csv`
+- `results/comparisons/compaction_runtime_local/candidate_stats.csv`
+- `results/comparisons/compaction_runtime_local/candidate_comparison.csv`
+
+`candidate_summary.csv` includes `runtime_win_count`, which counts benchmarks where coverage is preserved and mean runtime improves over the baseline. This is the preferred first-pass signal when runtime is the priority.
+
+| Candidate | Runtime wins | Stable wins | Wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean |
+|---|---:|---:|---:|---:|---:|---:|
+| `c1_no_learning` | 3 | 3 | 3 | +0.207 | -2.304 | +2.333 |
+| `c1_phase2_b5` | 2 | 2 | 2 | +0.003 | -0.307 | +2.778 |
+| `c1_phase2_b10` | 2 | 2 | 2 | -0.060 | +0.357 | +2.444 |
+| `c2_no_learning` | 1 | 1 | 1 | -0.008 | +0.128 | -0.444 |
+| `c1_learning` | 0 | 0 | 0 | -0.105 | +0.671 | +3.778 |
+| `c2_phase2_b5_learning` | 0 | 0 | 0 | -0.323 | +3.276 | -0.444 |
+| `c2_learning` | 0 | 0 | 0 | -0.355 | +3.458 | +0.889 |
+| `c1_phase2_b5_learning` | 0 | 0 | 0 | -0.366 | +3.328 | +3.333 |
+| `c1_phase2_b10_learning` | 0 | 0 | 0 | -0.401 | +3.776 | +2.333 |
+| `c2_phase2_b10_learning` | 0 | 0 | 0 | -0.437 | +4.359 | +0.111 |
+
+The best runtime-first candidate is `c1_no_learning` (`-c 1`). It preserved coverage on all three benchmarks and was a stable win on all three. This is an important ablation result: the improvement comes primarily from reducing compaction shuffle effort (`-c 1`), not from static learning (`-L`).
+
+| Benchmark | Candidate | Coverage delta | Runtime delta (s) | Pattern delta | Score delta | Stable win |
+|---|---|---:|---:|---:|---:|---|
+| `DMAtc.bench` | `c1_no_learning` | 0.000 | -2.184 | +2.333 | +0.195 | yes |
+| `destc.bench` | `c1_no_learning` | 0.000 | -4.066 | +2.333 | +0.383 | yes |
+| `pcitc.bench` | `c1_no_learning` | 0.000 | -0.661 | +2.333 | +0.043 | yes |
+
+Updated conclusion: the LLM-assisted loop first identified `-c 1 -L` as a promising direction. The follow-up local search showed that `-c 1` alone is stronger for runtime-first optimization. In other words, LLM was useful for pointing to the compaction-effort region, while the local search isolated the simpler and better setting.
+
 ## Notes
 
 - `atalanta-core/` should stay close to the original Atalanta source until the evaluation loop is reliable.

@@ -90,12 +90,92 @@ DEFAULT_CANDIDATES: tuple[CandidateConfig, ...] = (
 )
 
 
+COMPACTION_RUNTIME_LOCAL_CANDIDATES: tuple[CandidateConfig, ...] = (
+    CandidateConfig(
+        name="c1_learning",
+        options=("-c", "1", "-L"),
+        hypothesis="Local search center: reduce shuffle compaction effort while keeping static learning enabled.",
+        source="compaction_runtime_local",
+    ),
+    CandidateConfig(
+        name="c2_learning",
+        options=("-c", "2", "-L"),
+        hypothesis="Default compaction effort with static learning; checks whether learning alone explains the gain.",
+        source="compaction_runtime_local",
+    ),
+    CandidateConfig(
+        name="c1_phase2_b5_learning",
+        options=("-c", "1", "-B", "5", "-L"),
+        hypothesis="Combine the best compaction-learning direction with a shallow phase-2 retry budget.",
+        source="compaction_runtime_local",
+    ),
+    CandidateConfig(
+        name="c1_phase2_b10_learning",
+        options=("-c", "1", "-B", "10", "-L"),
+        hypothesis="Test whether moderate dynamic sensitization helps after reducing compaction effort.",
+        source="compaction_runtime_local",
+    ),
+    CandidateConfig(
+        name="c2_phase2_b5_learning",
+        options=("-c", "2", "-B", "5", "-L"),
+        hypothesis="Keep default shuffle limit and add shallow phase-2 search with learning.",
+        source="compaction_runtime_local",
+    ),
+    CandidateConfig(
+        name="c2_phase2_b10_learning",
+        options=("-c", "2", "-B", "10", "-L"),
+        hypothesis="Default compaction plus moderate phase-2 search and learning.",
+        source="compaction_runtime_local",
+    ),
+    CandidateConfig(
+        name="c1_no_learning",
+        options=("-c", "1"),
+        hypothesis="Ablation for c1_learning: isolate whether the runtime gain comes from compaction effort alone.",
+        source="compaction_runtime_local",
+    ),
+    CandidateConfig(
+        name="c2_no_learning",
+        options=("-c", "2"),
+        hypothesis="Default compaction without learning; anchors local search against default Atalanta behavior.",
+        source="compaction_runtime_local",
+    ),
+    CandidateConfig(
+        name="c1_phase2_b5",
+        options=("-c", "1", "-B", "5"),
+        hypothesis="Ablation for c1_phase2_b5_learning without static learning.",
+        source="compaction_runtime_local",
+    ),
+    CandidateConfig(
+        name="c1_phase2_b10",
+        options=("-c", "1", "-B", "10"),
+        hypothesis="Ablation for c1_phase2_b10_learning without static learning.",
+        source="compaction_runtime_local",
+    ),
+)
+
+
+CANDIDATE_SETS: dict[str, tuple[CandidateConfig, ...]] = {
+    "default": DEFAULT_CANDIDATES,
+    "compaction_runtime_local": COMPACTION_RUNTIME_LOCAL_CANDIDATES,
+}
+
+
 def get_default_candidates(limit: int | None = None) -> tuple[CandidateConfig, ...]:
     """Return the built-in candidate list, optionally truncated."""
 
+    return get_candidate_set("default", limit=limit)
+
+
+def get_candidate_set(name: str, *, limit: int | None = None) -> tuple[CandidateConfig, ...]:
+    """Return a named built-in candidate set."""
+
+    if name not in CANDIDATE_SETS:
+        available = ", ".join(sorted(CANDIDATE_SETS))
+        raise ValueError(f"Unknown candidate set {name!r}. Available sets: {available}")
+    candidates = CANDIDATE_SETS[name]
     if limit is None:
-        return DEFAULT_CANDIDATES
-    return DEFAULT_CANDIDATES[:limit]
+        return candidates
+    return candidates[:limit]
 
 
 def load_candidates_json(path: str | Path) -> tuple[CandidateConfig, ...]:
