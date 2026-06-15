@@ -1,16 +1,16 @@
-# LLM-Atalanta
+# Atalanta-Agent
 
-LLM-Atalanta is an experimental workspace for optimizing the Atalanta ATPG flow with LLM-assisted search, analysis, and feedback loops.
+Atalanta-Agent is an experimental agent-based optimization framework for the Atalanta ATPG flow.
 
-The initial design keeps the original Atalanta C++ implementation mostly isolated as a backend, while the LLM optimization pipeline lives outside the core tool.
+The project keeps the original Atalanta C++ implementation mostly isolated as a signoff backend, while the outer agent loop proposes candidates, runs experiments, parses metrics, compares against baselines, and feeds the results into the next optimization round. The LLM is one component of the agent loop: it proposes and explains candidates, but all wins must be signed off by real Atalanta runs.
 
 ## Repository Layout
 
 ```text
-LLM-Atalanta/
+Atalanta-Agent/
   atalanta-core/        # Copied Atalanta C++ source code.
   benchmarks/           # Benchmark .bench designs and existing generated data.
-  llm_optimizer/        # LLM-driven optimization pipeline.
+  llm_optimizer/        # Agent optimization pipeline around Atalanta.
     prompts/            # Prompt templates.
     configs/            # Experiment and search configs.
     experiments/        # Experiment orchestration code or notebooks.
@@ -19,18 +19,20 @@ LLM-Atalanta/
     runs/               # Iterative optimization outputs.
 ```
 
-## Intended Workflow
+## Agent Workflow
 
-The first implementation should treat `atalanta-core` as a black-box ATPG backend:
+The current implementation treats `atalanta-core` as a black-box ATPG signoff backend:
 
 1. Compile Atalanta.
 2. Select benchmark circuits from `benchmarks/`.
 3. Run Atalanta with candidate options or heuristics.
 4. Parse fault coverage, pattern count, runtime, and undetected faults.
-5. Ask an LLM to propose the next candidate configuration.
-6. Compare against baseline, random search, and grid search.
+5. Compare candidates against repeated baselines and signoff constraints.
+6. Ask the agent/LLM to propose the next candidate configuration.
+7. Expand each proposal with local search or ablation candidates.
+8. Repeat the run/compare/signoff loop.
 
-After this loop is stable, the project can add controlled white-box optimization, such as modifying fault ordering, X-fill, D-frontier selection, backtrace heuristics, or compaction logic.
+After this loop is stable, the project can add controlled white-box optimization, such as modifying compaction policy, fault ordering, X-fill, D-frontier selection, backtrace heuristics, or adaptive backtrack budgets. Even then, all algorithm patches should be ranked only by full Atalanta signoff results.
 
 ## Baseline Evaluation Loop
 
@@ -88,7 +90,7 @@ The comparison step writes:
 - `results/comparisons/candidate_stats.csv`: repeated-trial mean/std statistics by `(candidate, benchmark)`.
 - `results/comparisons/candidate_summary.csv`: candidate-level win counts and average deltas.
 
-`llm_optimizer/agent.py` provides the LLM-facing proposal loop: build a prompt from baseline/candidate summaries, call an OpenAI-compatible chat endpoint, validate strict JSON candidate proposals, and save them for `run_candidates.py`.
+`llm_optimizer/agent.py` provides the proposal step of the agent loop: build a prompt from baseline/candidate summaries, call an OpenAI-compatible chat endpoint, validate strict JSON candidate proposals, and save them for `run_candidates.py`.
 
 ```bash
 export OPENAI_API_KEY=...
@@ -114,11 +116,25 @@ python3 llm_optimizer/experiments/run_candidates.py \
   --trials 3
 ```
 
+## Why Agent-Based?
+
+This project is called Atalanta-Agent because the optimization is not only an LLM prompt. The agent loop includes:
+
+- structured candidate generation
+- strict JSON validation
+- isolated Atalanta execution
+- repeated-trial statistics
+- baseline-constrained signoff
+- local search and ablation around promising proposals
+- persistent run artifacts under `results/runs/`
+
+The LLM proposes hypotheses and candidate options; the agent infrastructure decides whether they survive executable evaluation.
+
 ## Comparison Experiment Summary
 
-This repository contains a completed comparison experiment for the LLM proposal in `results/proposals/proposal_20260613-215430.json`.
+This repository contains a completed comparison experiment for the agent/LLM proposal in `results/proposals/proposal_20260613-215430.json`.
 
-The LLM proposal was evaluated on `pcitc`, `destc`, and `DMAtc` with three repeated trials per `(candidate, benchmark)` pair:
+The proposal was evaluated on `pcitc`, `destc`, and `DMAtc` with three repeated trials per `(candidate, benchmark)` pair:
 
 ```bash
 python3 llm_optimizer/experiments/run_candidates.py \
@@ -137,7 +153,7 @@ The complete run artifacts are preserved under `results/runs/<run_id>/`. The key
 - `results/comparisons/llm_vs_repeated_default/candidate_summary.csv`
 - `results/comparisons/llm_vs_repeated_default/candidate_stats.csv`
 
-### LLM Proposal vs Original Baseline
+### Agent Proposal vs Original Baseline
 
 This comparison uses the earlier single-run baseline in `results/baseline/baseline_20260612-221054.csv`.
 
@@ -149,7 +165,7 @@ This comparison uses the earlier single-run baseline in `results/baseline/baseli
 | `phase2_b20_learning_seed1` | 2 | 2 | +0.180 | -1.563 | -2.333 |
 | `reverse_phase2_b10` | 1 | 1 | -0.220 | -10.396 | +126.000 |
 
-### LLM Proposal vs Repeated Default
+### Agent Proposal vs Repeated Default
 
 This comparison is more conservative: it uses `results/baseline/default_repeated_baseline.csv`, where default Atalanta was also run three times per benchmark.
 
@@ -161,7 +177,7 @@ This comparison is more conservative: it uses `results/baseline/default_repeated
 | `phase2_b5_learning` | 0 | 0 | -0.303 | +2.922 | +1.111 |
 | `phase2_b20_learning_seed1` | 0 | 0 | -0.547 | +5.456 | +0.111 |
 
-The best LLM-generated candidate is `compaction_c1_learning` (`-c 1 -L`). It preserved coverage on all three benchmarks. Against the repeated default baseline, it was a stable win on `DMAtc`, a small non-stable win on `destc`, and slightly worse on `pcitc`.
+The best generated candidate is `compaction_c1_learning` (`-c 1 -L`). It preserved coverage on all three benchmarks. Against the repeated default baseline, it was a stable win on `DMAtc`, a small non-stable win on `destc`, and slightly worse on `pcitc`.
 
 | Benchmark | Candidate | Coverage delta | Runtime delta (s) | Pattern delta | Score delta | Stable win |
 |---|---|---:|---:|---:|---:|---|
@@ -169,17 +185,17 @@ The best LLM-generated candidate is `compaction_c1_learning` (`-c 1 -L`). It pre
 | `destc.bench` | `compaction_c1_learning` | 0.000 | -0.977 | +7.000 | +0.028 | no |
 | `pcitc.bench` | `compaction_c1_learning` | 0.000 | +0.034 | +1.000 | -0.013 | no |
 
-Summary: the LLM proposal produced a useful new local-search direction around compaction effort plus static learning. It does not yet prove a broad advantage over default Atalanta, but it does show that the LLM-assisted loop can identify a coverage-preserving configuration with benchmark-specific gains. The next step is to search locally around `-c 1 -L`, for example `-c 1/-c 2`, with and without `-B 5/-B 10`, using more trials.
+Summary: the agent proposal produced a useful new local-search direction around compaction effort plus static learning. It does not yet prove a broad advantage over default Atalanta, but it does show that the agent-assisted loop can identify a coverage-preserving configuration with benchmark-specific gains. The next step is to search locally around `-c 1 -L`, for example `-c 1/-c 2`, with and without `-B 5/-B 10`, using more trials.
 
 ### Runtime-First Local Search
 
-The runtime-focused search space is implemented as the built-in candidate set `compaction_runtime_local`. It expands around the best observed LLM candidate `compaction_c1_learning` and tests:
+The runtime-focused search space is implemented as the built-in candidate set `compaction_runtime_local`. It expands around the best observed agent candidate `compaction_c1_learning` and tests:
 
 - `-c 1` vs `-c 2`
 - with and without `-L`
 - with and without `-B 5` / `-B 10`
 
-Methodologically, this is a local search around the LLM-discovered direction: reduce the test compaction shuffle effort first, then ablate whether static learning or phase-2 FAN search is actually responsible for the runtime improvement.
+Methodologically, this is a local search around the agent-discovered direction: reduce the test compaction shuffle effort first, then ablate whether static learning or phase-2 FAN search is actually responsible for the runtime improvement.
 
 The full local-search experiment was run with three repeated trials per `(candidate, benchmark)` pair:
 
@@ -231,7 +247,7 @@ The best runtime-first candidate is `c1_no_learning` (`-c 1`). It preserved cove
 | `destc.bench` | `c1_no_learning` | 0.000 | -4.066 | +2.333 | +0.383 | yes |
 | `pcitc.bench` | `c1_no_learning` | 0.000 | -0.661 | +2.333 | +0.043 | yes |
 
-Updated conclusion: the LLM-assisted loop first identified `-c 1 -L` as a promising direction. The follow-up local search showed that `-c 1` alone is stronger for runtime-first optimization. In other words, LLM was useful for pointing to the compaction-effort region, while the local search isolated the simpler and better setting.
+Updated conclusion: the agent-assisted loop first identified `-c 1 -L` as a promising direction. The follow-up local search showed that `-c 1` alone is stronger for runtime-first optimization. In other words, the LLM component was useful for pointing to the compaction-effort region, while the agent's local search isolated the simpler and better setting.
 
 ## Notes
 
