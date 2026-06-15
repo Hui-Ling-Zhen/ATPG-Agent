@@ -21,6 +21,13 @@ def _search_int(pattern: str, text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _search_bool(pattern: str, text: str) -> bool | None:
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).strip().lower() in {"yes", "on", "true", "1"}
+
+
 def parse_atalanta_output(text: str) -> dict[str, Any]:
     """Parse the summary printed by Atalanta.
 
@@ -51,6 +58,22 @@ def parse_atalanta_output(text: str) -> dict[str, Any]:
         "aborted_faults": _search_int(r"Number of aborted faults\s*:\s*" + _INT, text),
         "backtrackings": _search_int(r"Total number of backtrackings\s*:\s*" + _INT, text),
         "runtime_seconds": _search_float(r"Total\s*:\s*" + _FLOAT + r"\s*Secs", text),
+        "adaptive_compaction_enabled": _search_bool(
+            r"Adaptive shuffling compaction\s*:\s*(ON|OFF|YES|NO|TRUE|FALSE|1|0)",
+            text,
+        ),
+        "adaptive_shuffle_limit": _search_int(
+            r"Effective adaptive shuffle limit\s*:\s*" + _INT,
+            text,
+        ),
+        "adaptive_compaction_stopped_early": _search_bool(
+            r"Adaptive compaction stopped early\s*:\s*(YES|NO|ON|OFF|TRUE|FALSE|1|0)",
+            text,
+        ),
+        "adaptive_compaction_min_benefit": _search_float(
+            r"Adaptive compaction min benefit\s*:\s*" + _FLOAT,
+            text,
+        ),
     }
 
 

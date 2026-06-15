@@ -154,8 +154,43 @@ COMPACTION_RUNTIME_LOCAL_CANDIDATES: tuple[CandidateConfig, ...] = (
 )
 
 
+ADAPTIVE_COMPACTION_CANDIDATES: tuple[CandidateConfig, ...] = (
+    CandidateConfig(
+        name="adaptive_default",
+        options=(),
+        hypothesis="Evaluate the adaptive shuffle-stop core with default Atalanta options.",
+        source="adaptive_compaction",
+    ),
+    CandidateConfig(
+        name="adaptive_c1",
+        options=("-c", "1"),
+        hypothesis="Explicitly request one shuffle window under the adaptive compaction core.",
+        source="adaptive_compaction",
+    ),
+    CandidateConfig(
+        name="adaptive_c2",
+        options=("-c", "2"),
+        hypothesis="Explicit default shuffle request; adaptive core should reduce wasted shuffle rounds when benefit is low.",
+        source="adaptive_compaction",
+    ),
+    CandidateConfig(
+        name="adaptive_c1_learning",
+        options=("-c", "1", "-L"),
+        hypothesis="Check whether static learning still hurts runtime after adaptive compaction reduces shuffle effort.",
+        source="adaptive_compaction",
+    ),
+    CandidateConfig(
+        name="adaptive_c2_learning",
+        options=("-c", "2", "-L"),
+        hypothesis="Default shuffle request plus static learning under adaptive compaction.",
+        source="adaptive_compaction",
+    ),
+)
+
+
 CANDIDATE_SETS: dict[str, tuple[CandidateConfig, ...]] = {
     "default": DEFAULT_CANDIDATES,
+    "adaptive_compaction": ADAPTIVE_COMPACTION_CANDIDATES,
     "compaction_runtime_local": COMPACTION_RUNTIME_LOCAL_CANDIDATES,
 }
 

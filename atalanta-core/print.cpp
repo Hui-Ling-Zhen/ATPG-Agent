@@ -61,6 +61,10 @@
 extern char rptmode;
 extern char compact;
 extern int g_iRPTStopLimit, iseed, g_iMaxCompact;
+extern char g_cAdaptiveCompact;
+extern int g_iAdaptiveCompactEffectiveLimit;
+extern int g_iAdaptiveCompactStoppedEarly;
+extern double g_lfAdaptiveCompactMinBenefit;
 extern double lfMemSize;
 extern struct FAULT **g_pFaultList;
 
@@ -167,6 +171,10 @@ void print_atpg_result(FILE *fpFile, char *strCctFileName, int iNoGate, int iNoP
 	if (compact == 's')
 	{
 		fprintf(fpFile, "   Limit of shuffling compaction             : %d\n", g_iMaxCompact);
+		fprintf(fpFile, "   Adaptive shuffling compaction             : %s\n", (g_cAdaptiveCompact == 'y') ? "ON" : "OFF");
+		fprintf(fpFile, "   Effective adaptive shuffle limit          : %d\n", g_iAdaptiveCompactEffectiveLimit);
+		fprintf(fpFile, "   Adaptive compaction stopped early         : %s\n", g_iAdaptiveCompactStoppedEarly ? "YES" : "NO");
+		fprintf(fpFile, "   Adaptive compaction min benefit           : %.3lf patterns/sec\n", g_lfAdaptiveCompactMinBenefit);
 		fprintf(fpFile, "   Number of shuffles                        : %d\n", iNoShuffle);
 	}
 

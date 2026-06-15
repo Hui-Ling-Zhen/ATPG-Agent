@@ -255,6 +255,116 @@ The best runtime-first candidate is `c1_no_learning` (`-c 1`). It preserved cove
 
 Updated conclusion: the agent-assisted loop first identified `-c 1 -L` as a promising direction. The follow-up local search showed that `-c 1` alone is stronger for runtime-first optimization. In other words, the LLM component was useful for pointing to the compaction-effort region, while the agent's local search isolated the simpler and better setting.
 
+### Adaptive Shuffle Stop
+
+The first white-box compaction change is implemented in `atalanta-core/sim.cpp`. It turns the black-box observation about `-c 1` into an adaptive shuffle policy inside the core algorithm.
+
+The new policy keeps `-c` as the user-requested upper bound, but the core computes an effective adaptive shuffle limit from circuit size and the number of patterns before compaction. During shuffle compaction, each round records:
+
+- pattern count after the round
+- pattern reduction versus the previous round
+- CPU time spent in the round
+- benefit score: `pattern_reduction / extra_runtime`
+- whether the next shuffle should continue
+
+The first version is runtime-first. It stops early when the dynamic shuffle limit is reached, when a round gives no additional pattern reduction, or when the observed benefit falls below the threshold. This keeps fault coverage as the signoff constraint while accepting a small pattern increase if runtime improves.
+
+The summary output now includes adaptive fields such as:
+
+```text
+Adaptive shuffling compaction             : ON
+Effective adaptive shuffle limit          : 1
+Adaptive compaction stopped early         : YES
+Adaptive compaction min benefit           : 1.000 patterns/sec
+```
+
+The Python parser and CSV writers also record:
+
+- `adaptive_compaction_enabled`
+- `adaptive_shuffle_limit`
+- `adaptive_compaction_stopped_early`
+- `adaptive_compaction_min_benefit`
+
+A first smoke test was run on the standard three benchmarks:
+
+```bash
+python3 llm_optimizer/experiments/run_baseline.py \
+  --benchmarks pcitc destc DMAtc \
+  --timeout-seconds 75 \
+  --output results/baseline/adaptive_smoke_3bench.csv
+```
+
+| Benchmark | Coverage | Patterns before | Patterns after | Runtime (s) | Adaptive limit | Stopped early |
+|---|---:|---:|---:|---:|---:|---|
+| `pcitc.bench` | 99.826 | 7069 | 5968 | 11.267 | 1 | yes |
+| `destc.bench` | 100.000 | 477 | 387 | 12.467 | 1 | yes |
+| `DMAtc.bench` | 94.562 | 12557 | 10806 | 30.200 | 1 | yes |
+
+Compared with the earlier repeated default baseline, this first adaptive version preserves coverage on all three smoke benchmarks. It is intentionally more aggressive about runtime than pattern minimization, so pattern count can increase relative to default `-c 2`.
+
+### Adaptive Compaction Repeated-Trial Comparison
+
+The formal repeated-trial experiment is implemented as the built-in candidate set `adaptive_compaction` in `llm_optimizer/candidates.py`. It evaluates the adaptive core against the previous repeated default baseline with three trials per `(candidate, benchmark)` pair:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set adaptive_compaction \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --output results/candidates/adaptive_compaction_results.csv
+```
+
+The comparison was generated with:
+
+```bash
+PYTHONPATH="$(pwd)" python3 -m llm_optimizer.compare \
+  --baseline results/baseline/default_repeated_baseline.csv \
+  --candidates results/candidates/adaptive_compaction_results.csv \
+  --output-dir results/comparisons/adaptive_compaction
+```
+
+The key result files are:
+
+- `results/candidates/adaptive_compaction_results.csv`
+- `results/comparisons/adaptive_compaction/candidate_summary.csv`
+- `results/comparisons/adaptive_compaction/candidate_stats.csv`
+- `results/comparisons/adaptive_compaction/candidate_comparison.csv`
+
+The comparison output now also tracks adaptive-specific metrics:
+
+- `adaptive_enabled_rate`
+- `adaptive_shuffle_limit_mean`
+- `adaptive_stopped_early_rate`
+- `adaptive_min_benefit_mean`
+
+| Candidate | Runtime wins | Stable wins | Wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean | Early-stop rate |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `adaptive_c1` | 3 | 2 | 3 | +0.223 | -2.442 | +2.111 | 0.000 |
+| `adaptive_default` | 3 | 1 | 1 | +0.125 | -6.496 | +52.444 | 1.000 |
+| `adaptive_c2` | 3 | 1 | 1 | +0.099 | -6.098 | +51.111 | 1.000 |
+| `adaptive_c1_learning` | 3 | 1 | 1 | +0.021 | -0.509 | +3.000 | 0.000 |
+| `adaptive_c2_learning` | 2 | 1 | 1 | -0.329 | -2.094 | +53.889 | 1.000 |
+
+The best score-balanced candidate is `adaptive_c1` (`-c 1`). It preserves coverage on all three benchmarks, wins all three by score, wins all three by runtime, and has only a small mean pattern increase. It is close to the earlier `c1_no_learning` result, but slightly stronger in this repeated comparison: `average_score_delta_mean` improves from `+0.207` to `+0.223`, and `runtime_delta_mean` improves from `-2.304s` to `-2.442s`.
+
+| Benchmark | Candidate | Coverage delta | Runtime delta (s) | Pattern delta | Score delta | Stable win |
+|---|---|---:|---:|---:|---:|---|
+| `destc.bench` | `adaptive_c1` | 0.000 | -5.083 | +4.333 | +0.465 | yes |
+| `pcitc.bench` | `adaptive_c1` | 0.000 | -0.777 | +1.667 | +0.061 | yes |
+| `DMAtc.bench` | `adaptive_c1` | 0.000 | -1.467 | +0.333 | +0.143 | no |
+
+#### Runtime-First Finding
+
+The adaptive early-stop policy itself is confirmed to trigger for the default `-c 2` path: `adaptive_default` and `adaptive_c2` both have `adaptive_stopped_early_rate_mean = 1.0` and reduce runtime on all three benchmarks. This is a meaningful result even though these candidates are not the best score-balanced choices.
+
+| Candidate | Runtime wins | Runtime delta mean (s) | Runtime delta std (s) | Pattern delta mean | Early-stop rate |
+|---|---:|---:|---:|---:|---:|
+| `adaptive_default` | 3 | -6.496 | 4.258 | +52.444 | 1.000 |
+| `adaptive_c2` | 3 | -6.098 | 3.977 | +51.111 | 1.000 |
+
+This shows that adaptive shuffle stopping can be a strong runtime-first control knob: it preserves coverage while cutting substantial runtime from the default compaction path. The trade-off is that the first policy stops too aggressively and leaves more patterns after compaction. Therefore, the next optimization target is not whether adaptive stopping works, but how to tune its cost function so it keeps most of the runtime gain while reducing the pattern-count penalty.
+
 ## Notes
 
 - `atalanta-core/` should stay close to the original Atalanta source until the evaluation loop is reliable.

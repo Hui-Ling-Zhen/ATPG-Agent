@@ -80,6 +80,10 @@ extern level g_PIValues[];
 extern char _MODE_SIM, logmode, fillmode;
 extern char compact;
 extern int g_iMaxCompact;
+extern char g_cAdaptiveCompact;
+extern int g_iAdaptiveCompactEffectiveLimit;
+extern int g_iAdaptiveCompactStoppedEarly;
+extern double g_lfAdaptiveCompactMinBenefit;
 extern FILE *g_fpLogFile;
 extern int *g_PrimaryIn, *g_PrimaryOut;
 extern FAULTPTR *g_pFaultList;
@@ -121,6 +125,67 @@ extern char g_strVecFileName[FILENAME_MAX];
 int g_iNoPatternsForOneTime;
 //int ntest_each_limit;
 extern char gen_all_pat, no_faultsim;
+
+static int get_initial_compaction_patterns(int iPacket, int iBit, int iMaxBitSize)
+{
+	int iTotal = iPacket * iMaxBitSize + iBit;
+	return((iTotal > 0) ? iTotal : 1);
+}
+
+static int get_adaptive_compact_limit(int iRequestedLimit, int iNoGate, int iInitialPatterns)
+{
+	int iLimit = iRequestedLimit;
+
+	if (g_cAdaptiveCompact != 'y' || iRequestedLimit <= 1)
+	{
+		return(iRequestedLimit);
+	}
+
+	if (iInitialPatterns < 20000 || iNoGate < 100000)
+	{
+		iLimit = 1;
+	}
+	else if (iRequestedLimit > 3)
+	{
+		iLimit = 3;
+	}
+
+	return((iLimit < iRequestedLimit) ? iLimit : iRequestedLimit);
+}
+
+static void log_adaptive_compact_header(const char *pcEngine, int iRequestedLimit, int iEffectiveLimit,
+	int iNoGate, int iInitialPatterns)
+{
+	if (g_cAdaptiveCompact != 'y' || iRequestedLimit <= 1)
+	{
+		return;
+	}
+
+	fprintf(stdout, "Adaptive compaction (%s): requested_limit=%d effective_limit=%d gates=%d initial_patterns=%d min_benefit=%.3lf patterns/sec\n",
+		pcEngine, iRequestedLimit, iEffectiveLimit, iNoGate, iInitialPatterns, g_lfAdaptiveCompactMinBenefit);
+	if (logmode == 'y')
+	{
+		fprintf(g_fpLogFile, "Adaptive compaction (%s): requested_limit=%d effective_limit=%d gates=%d initial_patterns=%d min_benefit=%.3lf patterns/sec\n",
+			pcEngine, iRequestedLimit, iEffectiveLimit, iNoGate, iInitialPatterns, g_lfAdaptiveCompactMinBenefit);
+	}
+}
+
+static void log_adaptive_compact_round(const char *pcEngine, int iRound, int iPatterns, int iReduction,
+	double lfRoundTime, double lfBenefit, int bStopNext)
+{
+	if (g_cAdaptiveCompact != 'y')
+	{
+		return;
+	}
+
+	fprintf(stdout, "Adaptive compaction round (%s): round=%d patterns=%d reduction=%d runtime=%.3lf benefit=%.3lf continue=%s\n",
+		pcEngine, iRound, iPatterns, iReduction, lfRoundTime, lfBenefit, bStopNext ? "no" : "yes");
+	if (logmode == 'y')
+	{
+		fprintf(g_fpLogFile, "Adaptive compaction round (%s): round=%d patterns=%d reduction=%d runtime=%.3lf benefit=%.3lf continue=%s\n",
+			pcEngine, iRound, iPatterns, iReduction, lfRoundTime, lfBenefit, bStopNext ? "no" : "yes");
+	}
+}
 
 /*------random_sim-----------------------------------------------------
 TASK	Performs random similation until n consecutive packets of
@@ -896,6 +961,9 @@ int shuffle_fsim(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iStem
 	int iArrNoDetected[BITSIZE];
 	int iArrArray[MAXTEST], iStore = 0;
 	int bDone, bRunShuffle;
+	int iEffectiveCompactLimit, iInitialPatterns, iPreviousPatterns = (-1);
+	int bAdaptiveStopNext = FALSE;
+	double lfMinutes, lfSeconds, lfRoundStart, lfRoundEnd, lfRoundTime, lfBenefit;
 
 	/***********/
 	FILE *fpVecFile;
@@ -904,7 +972,13 @@ int shuffle_fsim(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iStem
 	}
 	/**************/
 
-	for (i = 0; i <= g_iMaxCompact; i++) //g_iMaxCompact == 2 by default
+	iInitialPatterns = get_initial_compaction_patterns(iPacket, iBit, iMaxBitSize);
+	iEffectiveCompactLimit = get_adaptive_compact_limit(g_iMaxCompact, iNoGate, iInitialPatterns);
+	g_iAdaptiveCompactEffectiveLimit = iEffectiveCompactLimit;
+	g_iAdaptiveCompactStoppedEarly = FALSE;
+	log_adaptive_compact_header("FSIM", g_iMaxCompact, iEffectiveCompactLimit, iNoGate, iInitialPatterns);
+
+	for (i = 0; i <= iEffectiveCompactLimit; i++) //g_iMaxCompact == 2 by default
 	{
 		iArrArray[i] = 0; //allocate 10000, only use 3 by default
 	}
@@ -915,6 +989,7 @@ int shuffle_fsim(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iStem
 	/* shuffle fault simulation */
 	while ((!bDone)) //One shuffle
 	{
+		getTime(&lfMinutes, &lfSeconds, &lfRoundStart);
 		(*piShuffle)++;
 		for (i = 0; i < iNoGate; i++)
 		{
@@ -939,13 +1014,20 @@ int shuffle_fsim(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iStem
 			randomizePatterns_FSIM(g_test_store, g_test_vectors, iPacket_Local, iBit_Local, iNoPI);
 			//g_test_store -----------> g_test_vectors
 			iBit_Local = iPacket_Local = 0;
-			for (iCompactCnt = 0; iCompactCnt <= g_iMaxCompact - 1; iCompactCnt++) //iCompactCnt = 0, 1
+			if (bAdaptiveStopNext == TRUE)
 			{
 				iStop = STOP;
-				if (iArrArray[iCompactCnt] != iArrArray[iCompactCnt + 1])
+			}
+			else
+			{
+				for (iCompactCnt = 0; iCompactCnt <= iEffectiveCompactLimit - 1; iCompactCnt++) //iCompactCnt = 0, 1
 				{
-					iStop = TWO;
-					break;
+					iStop = STOP;
+					if (iArrArray[iCompactCnt] != iArrArray[iCompactCnt + 1])
+					{
+						iStop = TWO;
+						break;
+					}
 				}
 			}
 		}
@@ -1067,7 +1149,32 @@ int shuffle_fsim(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iStem
 			g_iDStack = g_iSStack;
 		}
 
-		if (iStore == g_iMaxCompact + 1) //iStore == 0, 1, 2
+		getTime(&lfMinutes, &lfSeconds, &lfRoundEnd);
+		lfRoundTime = lfRoundEnd - lfRoundStart;
+		lfBenefit = 0.0;
+		if (iPreviousPatterns >= 0 && !bDone)
+		{
+			int iReduction = iPreviousPatterns - iNoPatterns;
+			if (lfRoundTime > 0.0)
+			{
+				lfBenefit = (double)iReduction / lfRoundTime;
+			}
+			else if (iReduction > 0)
+			{
+				lfBenefit = (double)iReduction;
+			}
+			if (g_cAdaptiveCompact == 'y' && g_iMaxCompact > 1 &&
+				((*piShuffle) >= iEffectiveCompactLimit + 1 ||
+				iReduction <= 0 || lfBenefit < g_lfAdaptiveCompactMinBenefit))
+			{
+				bAdaptiveStopNext = TRUE;
+				g_iAdaptiveCompactStoppedEarly = TRUE;
+			}
+			log_adaptive_compact_round("FSIM", *piShuffle, iNoPatterns, iReduction, lfRoundTime, lfBenefit, bAdaptiveStopNext);
+		}
+		iPreviousPatterns = iNoPatterns;
+
+		if (iStore == iEffectiveCompactLimit + 1) //iStore == 0, 1, 2
 		{
 			iStore = 0;
 		}
@@ -1231,8 +1338,17 @@ int shuffle_hope(int iNoGate, int iNoPI, int iNoPO, int iNoFault, int *piShuffle
 	int iBit_Local = 0, iPacket_Local = 0;
 	int iArrArray[MAXTEST], iStore = 0;
 	int bDone, bRunShuffle;
+	int iEffectiveCompactLimit, iInitialPatterns, iPreviousPatterns = (-1);
+	int bAdaptiveStopNext = FALSE;
+	double lfMinutes, lfSeconds, lfRoundStart, lfRoundEnd, lfRoundTime, lfBenefit;
 
-	for (i = 0; i <= g_iMaxCompact; i++) //g_iMaxCompact == 2 by default
+	iInitialPatterns = get_initial_compaction_patterns(iPacket, iBit, iMaxBitSize);
+	iEffectiveCompactLimit = get_adaptive_compact_limit(g_iMaxCompact, iNoGate, iInitialPatterns);
+	g_iAdaptiveCompactEffectiveLimit = iEffectiveCompactLimit;
+	g_iAdaptiveCompactStoppedEarly = FALSE;
+	log_adaptive_compact_header("HOPE", g_iMaxCompact, iEffectiveCompactLimit, iNoGate, iInitialPatterns);
+
+	for (i = 0; i <= iEffectiveCompactLimit; i++) //g_iMaxCompact == 2 by default
 	{
 		iArrArray[i] = 0; //allocate 10000, only use 3 by default
 	}
@@ -1243,6 +1359,7 @@ int shuffle_hope(int iNoGate, int iNoPI, int iNoPO, int iNoFault, int *piShuffle
 	/* shufle fault simulation */
 	while ((!bDone)) //One shuffle
 	{
+		getTime(&lfMinutes, &lfSeconds, &lfRoundStart);
 		(*piShuffle)++;
 		if ((iNoRestoredFault = restoreUndetectedState_HOPE(iNoFault)) < 0) //IMPOSSIBLE !!
 		{
@@ -1264,13 +1381,20 @@ int shuffle_hope(int iNoGate, int iNoPI, int iNoPO, int iNoFault, int *piShuffle
 			randomizePatterns_HOPE(g_test_store, g_test_store1, g_test_vectors, g_test_vectors1, iPacket_Local, iBit_Local, iNoPI);
 			//g_test_store -----------> g_test_vectors
 			iBit_Local = iPacket_Local = 0;
-			for (iCompactCnt = 0; iCompactCnt <= g_iMaxCompact - 1; iCompactCnt++) //iCompactCnt = 0, 1
+			if (bAdaptiveStopNext == TRUE)
 			{
 				iStop = STOP;
-				if (iArrArray[iCompactCnt] != iArrArray[iCompactCnt + 1])
+			}
+			else
+			{
+				for (iCompactCnt = 0; iCompactCnt <= iEffectiveCompactLimit - 1; iCompactCnt++) //iCompactCnt = 0, 1
 				{
-					iStop = TWO;
-					break;
+					iStop = STOP;
+					if (iArrArray[iCompactCnt] != iArrArray[iCompactCnt + 1])
+					{
+						iStop = TWO;
+						break;
+					}
 				}
 			}
 		}
@@ -1364,7 +1488,32 @@ int shuffle_hope(int iNoGate, int iNoPI, int iNoPO, int iNoFault, int *piShuffle
 			}
 		}
 		
-		if (iStore == g_iMaxCompact + 1) //iStore == 0, 1, 2
+		getTime(&lfMinutes, &lfSeconds, &lfRoundEnd);
+		lfRoundTime = lfRoundEnd - lfRoundStart;
+		lfBenefit = 0.0;
+		if (iPreviousPatterns >= 0 && !bDone)
+		{
+			int iReduction = iPreviousPatterns - iNoPatterns;
+			if (lfRoundTime > 0.0)
+			{
+				lfBenefit = (double)iReduction / lfRoundTime;
+			}
+			else if (iReduction > 0)
+			{
+				lfBenefit = (double)iReduction;
+			}
+			if (g_cAdaptiveCompact == 'y' && g_iMaxCompact > 1 &&
+				((*piShuffle) >= iEffectiveCompactLimit + 1 ||
+				iReduction <= 0 || lfBenefit < g_lfAdaptiveCompactMinBenefit))
+			{
+				bAdaptiveStopNext = TRUE;
+				g_iAdaptiveCompactStoppedEarly = TRUE;
+			}
+			log_adaptive_compact_round("HOPE", *piShuffle, iNoPatterns, iReduction, lfRoundTime, lfBenefit, bAdaptiveStopNext);
+		}
+		iPreviousPatterns = iNoPatterns;
+
+		if (iStore == iEffectiveCompactLimit + 1) //iStore == 0, 1, 2
 		{
 			iStore = 0;
 		}

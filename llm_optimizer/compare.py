@@ -35,6 +35,10 @@ CSV_FIELDS = (
     "baseline_runtime",
     "candidate_score",
     "baseline_score",
+    "adaptive_compaction_enabled",
+    "adaptive_shuffle_limit",
+    "adaptive_compaction_stopped_early",
+    "adaptive_compaction_min_benefit",
     "run_id",
     "run_dir",
 )
@@ -64,6 +68,10 @@ STATS_FIELDS = (
     "score_std",
     "baseline_score_mean",
     "score_delta_mean",
+    "adaptive_enabled_rate",
+    "adaptive_shuffle_limit_mean",
+    "adaptive_stopped_early_rate",
+    "adaptive_min_benefit_mean",
     "wins_benchmark",
     "runtime_win",
     "stable_win",
@@ -83,6 +91,9 @@ SUMMARY_FIELDS = (
     "runtime_delta_std",
     "pattern_delta_mean",
     "pattern_delta_std",
+    "adaptive_enabled_rate_mean",
+    "adaptive_shuffle_limit_mean",
+    "adaptive_stopped_early_rate_mean",
 )
 
 
@@ -202,6 +213,16 @@ def compare_rows(
                 "baseline_runtime": base_runtime,
                 "candidate_score": cand_score,
                 "baseline_score": base_score,
+                "adaptive_compaction_enabled": row.get("adaptive_compaction_enabled", ""),
+                "adaptive_shuffle_limit": row.get("adaptive_shuffle_limit", ""),
+                "adaptive_compaction_stopped_early": row.get(
+                    "adaptive_compaction_stopped_early",
+                    "",
+                ),
+                "adaptive_compaction_min_benefit": row.get(
+                    "adaptive_compaction_min_benefit",
+                    "",
+                ),
                 "run_id": row.get("run_id", ""),
                 "run_dir": row.get("run_dir", ""),
             }
@@ -243,6 +264,13 @@ def _field_values(rows: list[dict[str, Any]], field: str) -> list[float]:
     ]
 
 
+def _bool_rate(rows: list[dict[str, Any]], field: str) -> float | None:
+    values = [row.get(field) for row in rows if row.get(field) not in (None, "")]
+    if not values:
+        return None
+    return sum(1 for value in values if _to_bool(value)) / len(values)
+
+
 def aggregate_repeated_trials(comparisons: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in comparisons:
@@ -258,6 +286,11 @@ def aggregate_repeated_trials(comparisons: list[dict[str, Any]]) -> list[dict[st
         pattern_values = _field_values(successful, "candidate_patterns")
         runtime_values = _field_values(successful, "candidate_runtime")
         score_values = _field_values(successful, "candidate_score")
+        adaptive_limit_values = _field_values(successful, "adaptive_shuffle_limit")
+        adaptive_min_benefit_values = _field_values(
+            successful,
+            "adaptive_compaction_min_benefit",
+        )
 
         coverage_mean = _mean(coverage_values)
         patterns_mean = _mean(pattern_values)
@@ -340,6 +373,16 @@ def aggregate_repeated_trials(comparisons: list[dict[str, Any]]) -> list[dict[st
                 "score_std": score_std,
                 "baseline_score_mean": baseline_score,
                 "score_delta_mean": score_delta_mean,
+                "adaptive_enabled_rate": _bool_rate(
+                    successful,
+                    "adaptive_compaction_enabled",
+                ),
+                "adaptive_shuffle_limit_mean": _mean(adaptive_limit_values),
+                "adaptive_stopped_early_rate": _bool_rate(
+                    successful,
+                    "adaptive_compaction_stopped_early",
+                ),
+                "adaptive_min_benefit_mean": _mean(adaptive_min_benefit_values),
                 "wins_benchmark": wins,
                 "runtime_win": runtime_win,
                 "stable_win": stable_win,
@@ -387,6 +430,15 @@ def summarize_stats(stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 ),
                 "pattern_delta_std": _std(
                     [float(row["pattern_delta_mean"]) for row in rows if row.get("pattern_delta_mean") is not None]
+                ),
+                "adaptive_enabled_rate_mean": _mean(
+                    [float(row["adaptive_enabled_rate"]) for row in rows if row.get("adaptive_enabled_rate") is not None]
+                ),
+                "adaptive_shuffle_limit_mean": _mean(
+                    [float(row["adaptive_shuffle_limit_mean"]) for row in rows if row.get("adaptive_shuffle_limit_mean") is not None]
+                ),
+                "adaptive_stopped_early_rate_mean": _mean(
+                    [float(row["adaptive_stopped_early_rate"]) for row in rows if row.get("adaptive_stopped_early_rate") is not None]
                 ),
             }
         )
