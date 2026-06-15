@@ -1,16 +1,16 @@
-# Atalanta-Agent
+# ATPG-Agent
 
-Atalanta-Agent is an experimental agent-based optimization framework for the Atalanta ATPG flow.
+ATPG-Agent is an experimental agent-based optimization framework for automatic test pattern generation (ATPG).
 
-The project keeps the original Atalanta C++ implementation mostly isolated as a signoff backend, while the outer agent loop proposes candidates, runs experiments, parses metrics, compares against baselines, and feeds the results into the next optimization round. The LLM is one component of the agent loop: it proposes and explains candidates, but all wins must be signed off by real Atalanta runs.
+The current implementation uses Atalanta as the core ATPG algorithm and signoff backend. The outer agent loop proposes candidates, runs experiments, parses metrics, compares against baselines, and feeds the results into the next optimization round. The LLM is one component of the agent loop: it proposes and explains candidates, but all wins must be signed off by real ATPG runs.
 
 ## Repository Layout
 
 ```text
-Atalanta-Agent/
-  atalanta-core/        # Copied Atalanta C++ source code.
+ATPG-Agent/
+  atalanta-core/        # Atalanta C++ source code, used as the current core ATPG backend.
   benchmarks/           # Benchmark .bench designs and existing generated data.
-  llm_optimizer/        # Agent optimization pipeline around Atalanta.
+  llm_optimizer/        # Agent optimization pipeline around the ATPG backend.
     prompts/            # Prompt templates.
     configs/            # Experiment and search configs.
     experiments/        # Experiment orchestration code or notebooks.
@@ -21,18 +21,24 @@ Atalanta-Agent/
 
 ## Agent Workflow
 
-The current implementation treats `atalanta-core` as a black-box ATPG signoff backend:
+The current implementation treats `atalanta-core` as a black-box ATPG core:
 
-1. Compile Atalanta.
+1. Compile the ATPG backend, currently Atalanta.
 2. Select benchmark circuits from `benchmarks/`.
-3. Run Atalanta with candidate options or heuristics.
+3. Run the backend with candidate options or heuristics.
 4. Parse fault coverage, pattern count, runtime, and undetected faults.
 5. Compare candidates against repeated baselines and signoff constraints.
 6. Ask the agent/LLM to propose the next candidate configuration.
 7. Expand each proposal with local search or ablation candidates.
 8. Repeat the run/compare/signoff loop.
 
-After this loop is stable, the project can add controlled white-box optimization, such as modifying compaction policy, fault ordering, X-fill, D-frontier selection, backtrace heuristics, or adaptive backtrack budgets. Even then, all algorithm patches should be ranked only by full Atalanta signoff results.
+After this loop is stable, the project can add controlled white-box optimization inside the core algorithm, such as modifying compaction policy, fault ordering, X-fill, D-frontier selection, backtrace heuristics, or adaptive backtrack budgets. Even then, all algorithm patches should be ranked only by full ATPG signoff results.
+
+## Current Core Algorithm
+
+The first backend is `atalanta-core/`, a mostly isolated copy of the original Atalanta implementation. Atalanta is a classical ATPG tool for stuck-at faults in combinational circuits. It uses the FAN algorithm for test generation, parallel pattern single fault propagation for fault simulation, and built-in test compaction options.
+
+Keeping Atalanta isolated is intentional: the agent can first optimize and evaluate command-line configurations from outside the tool, then later make controlled white-box changes to the core algorithm once the evaluation loop is reliable.
 
 ## Baseline Evaluation Loop
 
@@ -118,7 +124,7 @@ python3 llm_optimizer/experiments/run_candidates.py \
 
 ## Why Agent-Based?
 
-This project is called Atalanta-Agent because the optimization is not only an LLM prompt. The agent loop includes:
+This project is called ATPG-Agent because the optimization target is the ATPG process, not only one specific implementation. Atalanta is the current core algorithm, while the agent loop includes:
 
 - structured candidate generation
 - strict JSON validation
