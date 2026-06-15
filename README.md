@@ -513,13 +513,38 @@ Internally, `-O history` sorts faults by the profile score and uses the profile'
 - historically aborted and low-value faults receive a very small budget
 - ordinary faults keep the default budget
 
-A pcitc smoke test confirmed that `-O history` loads the profile and runs successfully:
+The formal 3-trial experiment was run with:
 
-| Candidate | Coverage | Patterns | Aborted | Backtrackings | Runtime (s) | Fault ordering | Profile |
-|---|---:|---:|---:|---:|---:|---|---|
-| `history_ordering` | 99.826 | 5950 | 1 | 62 | 10.050 | `history` | `pcitc_fault_profile.json` |
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set fault_to_fault_learning \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --profile-dir results/profiles \
+  --output results/candidates/fault_to_fault_learning_results.csv
+```
 
-This is a smoke result, not a repeated-trial conclusion. The proper next experiment is to compare `fault_to_fault_learning` against both repeated default and `adaptive_c1` baselines, then let the agent tune `alpha/beta/gamma/delta/epsilon` based on the resulting profile and comparison CSVs.
+The comparison outputs are:
+
+- `results/comparisons/fault_to_fault_learning_vs_default/`
+- `results/comparisons/fault_to_fault_learning_vs_adaptive_c1/`
+
+All 36 candidate runs succeeded, with no timeouts and no coverage regressions.
+
+### Representative Results At A Glance
+
+The three most representative results are `adaptive_c1`, `stem_first`, and `history_ordering`. They show the progression from compaction policy, to structural fault ordering, to history-aware fault-to-fault learning. The table below uses the same repeated default baseline for all three.
+
+| Result | Agent/LLM Capability Represented | Coverage regressions | Wins | Stable wins | Runtime wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean | Backtracking delta mean |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `adaptive_c1` | Finds a runtime bottleneck in test compaction and turns it into an adaptive compaction policy. | 0 | 3 | 2 | 3 | +0.223 | -2.442 | +2.111 | n/a |
+| `stem_first` | Converts ATPG structure knowledge into a static, testable fault-ordering heuristic. | 0 | 3 | 3 | 3 | +0.426 | -6.059 | +18.222 | +55.667 |
+| `history_ordering` | Reuses previous fault-solving traces as an offline profile for next-run ordering and per-fault backtrack budgets. | 0 | 3 | 3 | 3 | +0.689 | -9.615 | +27.222 | -5822.667 |
+
+`history_ordering` is the strongest runtime/backtracking result so far. Against repeated default, it improves runtime by `9.615s` on average and reduces total backtrackings by `5822.667` on average, while preserving coverage on every benchmark. Compared with `stem_first`, it shows why history-aware learning is more than a static structural heuristic: it learns which faults were historically valuable or expensive and changes both ordering and backtrack budget in the next run.
+
+The trade-off is pattern count. `history_ordering` increases patterns more than `adaptive_c1`, while `history_ordering_c1` reduces that increase at the cost of some runtime gain. The next agent step should tune `alpha/beta/gamma/delta/epsilon` to keep most of the backtracking/runtime gain while reducing the pattern penalty.
 
 ## Notes
 
