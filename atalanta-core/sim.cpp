@@ -74,6 +74,8 @@ extern level g_test_vectors[MAXTEST / 10][MAXPI + 1];
 extern level g_test_vectors1[MAXTEST / 10][MAXPI + 1];
 extern level g_test_store[MAXTEST / 10][MAXPI + 1];
 extern level g_test_store1[MAXTEST / 10][MAXPI + 1];
+extern int g_iPatternOriginVectors[MAXTEST / 10][BITSIZE];
+extern int g_iPatternOriginStore[MAXTEST / 10][BITSIZE];
 extern int g_iSStack, g_iDStack;
 extern status g_iUpdateFlag;
 extern level g_PIValues[];
@@ -85,6 +87,8 @@ extern int g_iAdaptiveCompactEffectiveLimit;
 extern int g_iAdaptiveCompactStoppedEarly;
 extern double g_lfAdaptiveCompactMinBenefit;
 extern FILE *g_fpLogFile;
+extern FILE *g_fpFaultTraceFile;
+extern FILE *g_fpPatternTraceFile;
 extern int *g_PrimaryIn, *g_PrimaryOut;
 extern FAULTPTR *g_pFaultList;
 extern STACKTYPE g_stack;
@@ -187,6 +191,83 @@ static void log_adaptive_compact_round(const char *pcEngine, int iRound, int iPa
 	}
 }
 
+static const char *fault_result_to_string(int iState)
+{
+	if (iState == TEST_FOUND)
+	{
+		return("detected");
+	}
+	if (iState == NO_TEST)
+	{
+		return("redundant");
+	}
+	return("aborted");
+}
+
+static void log_fault_trace(int iPhase, int iSelectionOrder, int iFaultIndex, FAULTPTR pFault, int iState,
+	int iBacktracks, double lfFanRuntime, int iGeneratedPatternIndex, int iDetectedByPattern)
+{
+	GATEPTR pGate = pFault->gate;
+	GATEPTR pSite = (pFault->line == OUTFAULT) ? pGate : pGate->inList[pFault->line];
+	int iExtraDrops = (iDetectedByPattern > 0) ? iDetectedByPattern - 1 : 0;
+	const char *pcGateName = (pGate->hash && pGate->hash->symbol) ? pGate->hash->symbol : "";
+	const char *pcSiteName = (pSite->hash && pSite->hash->symbol) ? pSite->hash->symbol : "";
+
+	if (g_fpFaultTraceFile == NULL)
+	{
+		return;
+	}
+
+	fprintf(g_fpFaultTraceFile,
+		"%d,%d,%d,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%.6lf,%d,%d,%d,%d\n",
+		iPhase,
+		iSelectionOrder,
+		iFaultIndex,
+		pcGateName,
+		pcSiteName,
+		pFault->line,
+		pFault->type,
+		pGate->dpi,
+		pGate->dpo,
+		pSite->dpi,
+		pSite->dpo,
+		(pGate->outCount > 1),
+		(pSite->outCount > 1),
+		pGate->outCount,
+		pGate->inCount,
+		pSite->outCount,
+		pSite->inCount,
+		pGate->cont0,
+		pGate->cont1,
+		pSite->cont0,
+		pSite->cont1,
+		fault_result_to_string(iState),
+		iState,
+		iBacktracks,
+		lfFanRuntime,
+		iGeneratedPatternIndex,
+		iDetectedByPattern,
+		iExtraDrops,
+		iGeneratedPatternIndex);
+}
+
+static void log_pattern_trace(const char *pcEngine, const char *pcMode, int iShuffleRound,
+	int iCompactedPatternIndex, int iOriginPatternIndex, int iDetectedFaults)
+{
+	if (g_fpPatternTraceFile == NULL)
+	{
+		return;
+	}
+
+	fprintf(g_fpPatternTraceFile, "%s,%s,%d,%d,%d,%d,yes\n",
+		pcEngine,
+		pcMode,
+		iShuffleRound,
+		iCompactedPatternIndex,
+		iOriginPatternIndex,
+		iDetectedFaults);
+}
+
 /*------random_sim-----------------------------------------------------
 TASK	Performs random similation until n consecutive packets of
 	random patterns do not detect any new fault.
@@ -226,6 +307,7 @@ int random_fsim(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iStem,
 						{
 							resetbit(g_test_vectors[*npacket][j], *nbit);
 						}
+					g_iPatternOriginVectors[*npacket][*nbit] = 0;
 					if (++(*nbit) == maxbit)
 					{
 						*nbit = 0; (*npacket)++;
@@ -300,6 +382,7 @@ int random_hope(int nopi, int nopo, level *LFSR, int limit, int maxbit, int maxd
 					{
 						setb0(g_test_vectors[*npacket][j], g_test_vectors1[*npacket][j], *nbit);
 					}
+				g_iPatternOriginVectors[*npacket][*nbit] = 0;
 				if (++(*nbit) == maxbit)
 				{
 					*nbit = 0; (*npacket)++;
@@ -547,6 +630,9 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 	int iLastUndetectedFault;
 	int iState;
 	int iNoDetected = 0;
+	int iSelectionOrder = 0;
+	int iGeneratedPatternIndex = 0;
+	int iDetectedByPattern = 0;
 	FAULTTYPE *pLastUndetectedFault;
 	bool bDone;
 	GATEPTR pLastUndetectedGate;
@@ -616,6 +702,7 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 			continue; //OK Phase 2 ----------> EXIT !!!!!
 		}
 		pLastUndetectedGate = pLastUndetectedFault->gate;
+		iSelectionOrder++;
 
 		g_iNoPatternsForOneTime = 0;
 		if (no_faultsim == 'y') //NOT default !!!
@@ -649,6 +736,8 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 
 		getTime(&lfMinutes, &lfSeconds, &lfRunTime2);
 		(*plfFanTime) += (lfRunTime2 - lfRunTime1);
+		iGeneratedPatternIndex = 0;
+		iDetectedByPattern = 0;
 
 		if (no_faultsim == 'y') ///////////////////////////NOT default
 		{
@@ -656,6 +745,8 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 			(*piNoPatterns) += g_iNoPatternsForOneTime;
 			if (g_iNoPatternsForOneTime > 0) //iState == TEST_FOUND
 			{
+				iGeneratedPatternIndex = *piNoPatterns;
+				iDetectedByPattern = 1;
 				pLastUndetectedFault->detected = DETECTED;
 				iNoDetected++;
 			}
@@ -682,6 +773,7 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 			/* fault is detected, delete the detected fault from fault list */
 			pLastUndetectedFault->detected = PROCESSED;
 			(*piNoPatterns)++;
+			iGeneratedPatternIndex = *piNoPatterns;
 
 			/*
 			pLastUndetectedFault->detected=DETECTED;
@@ -692,6 +784,7 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 			/* assign random zero and ones to the unassigned bits */
 			fill_patterns(fillmode, *piPacket, *piBit, iNoPI);
 			//OUTPUT: g_net[i] (PI)
+			g_iPatternOriginVectors[*piPacket][*piBit] = iGeneratedPatternIndex;
 
 			
 			if (_MODE_SIM == 'f') //Default FSIM !!!
@@ -724,6 +817,7 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 			//piNoPatterns NO USE !!!
 			iArrProfile[0] = tgen_sim(iNoGate, iMaxLevelAdd2, iNoPI, iNoPO, iStem, pStem, *piNoPatterns, iArrProfile);
 			iNoDetected += iArrProfile[0];
+			iDetectedByPattern = iArrProfile[0];
 
 
 			//Print functions, no big use !!
@@ -787,6 +881,8 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 			(*piNoOverBackTrack)++;
 			pLastUndetectedFault->detected = PROCESSED;
 		}
+		log_fault_trace(bPhase2 ? 2 : 1, iSelectionOrder, iLastUndetectedFault, pLastUndetectedFault, iState,
+			iNoBackTrack, lfRunTime2 - lfRunTime1, iGeneratedPatternIndex, iDetectedByPattern);
 	}
 
 	return(iNoDetected);
@@ -838,6 +934,7 @@ void randomizePatterns_FSIM(level test_store[][MAXPI + 1], level test_vectors[][
 			}
 			//test_store -> test_vectors, totally number: iPacket_Local * 32 + iBit_Local
 		}
+		g_iPatternOriginVectors[iPacket_Local][iBit_Local] = g_iPatternOriginStore[k][B];
 		if (++iBit_Local == iMaxBitSize) //iMaxBitSize == 32 !!!
 		{
 			iBit_Local = 0;
@@ -917,6 +1014,7 @@ int reverse_fsim(int nog, int nopi, int nopo, int LEVEL, int nstem, GATEPTR *ste
 					if (compact == 'r')
 					{
 						printio(test, nopi, nopo, i, no_test);
+						log_pattern_trace("FSIM", "reverse", 0, no_test, g_iPatternOriginVectors[k][i], profile[i]);
 						if (logmode == 'y')
 						{
 							fprintf(g_fpLogFile, "test %4d: ", no_test);
@@ -1091,6 +1189,7 @@ int shuffle_fsim(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iStem
 						if (iStop == STOP) //Always: iStop == STOP, Only one time to execute.
 						{
 							printio(fpTestFile, iNoPI, iNoPO, i, iNoPatterns); //Print compacted patterns!!!
+							log_pattern_trace("FSIM", "shuffle", *piShuffle, iNoPatterns, g_iPatternOriginVectors[iPacketIndex][i], iArrNoDetected[i]);
 
 							printinputs(fpVecFile, iNoPI, i); //Print compacted patterns!!!
 							fprintf(fpVecFile, "\n");
@@ -1118,6 +1217,7 @@ int shuffle_fsim(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iStem
 								resetbit(g_test_store[iPacket_Local][j], iBit_Local);
 							}
 						}
+						g_iPatternOriginStore[iPacket_Local][iBit_Local] = g_iPatternOriginVectors[iPacketIndex][i];
 						if (++iBit_Local == iMaxBitSize)
 						{
 							iBit_Local = 0; iPacket_Local++;
@@ -1232,6 +1332,7 @@ void randomizePatterns_HOPE(level test_store[][MAXPI + 1], level test_store1[][M
 				resetbit(test_vectors1[iPacket_Local][j], iBit_Local);
 			}
 		}
+		g_iPatternOriginVectors[iPacket_Local][iBit_Local] = g_iPatternOriginStore[k][B];
 		if (++iBit_Local == iMaxBitSize)
 		{
 			iBit_Local = 0;
@@ -1448,6 +1549,7 @@ int shuffle_hope(int iNoGate, int iNoPI, int iNoPO, int iNoFault, int *piShuffle
 						fprintf(fpTestFile, " ");
 						printiovalues(fpTestFile, g_PrimaryOut, iNoPO, 'o', 'g', 0);
 						fprintf(fpTestFile, "\n");
+						log_pattern_trace("HOPE", "shuffle", *piShuffle, iNoPatterns, g_iPatternOriginVectors[iPacketIndex][i], iNoDetectedOnce);
 						if (logmode == 'y')
 						{
 							fprintf(g_fpLogFile, "fpTestFile %4d: ", iNoPatterns);
@@ -1476,6 +1578,7 @@ int shuffle_hope(int iNoGate, int iNoPI, int iNoPO, int iNoFault, int *piShuffle
 							break;
 						}
 					}
+					g_iPatternOriginStore[iPacket_Local][iBit_Local] = g_iPatternOriginVectors[iPacketIndex][i];
 					if (++iBit_Local == iMaxBitSize)
 					{
 						iBit_Local = 0; iPacket_Local++;

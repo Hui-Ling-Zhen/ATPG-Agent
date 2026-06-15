@@ -54,6 +54,12 @@ CSV_FIELDS = (
     "aborted_faults",
     "backtrackings",
     "runtime_seconds",
+    "fault_ordering_mode",
+    "fault_trace_attempts",
+    "generated_patterns_traced",
+    "faults_dropped_per_generated_pattern_mean",
+    "extra_drops_per_generated_pattern_mean",
+    "max_pattern_extra_drops",
     "adaptive_compaction_enabled",
     "adaptive_shuffle_limit",
     "adaptive_compaction_stopped_early",
@@ -63,6 +69,8 @@ CSV_FIELDS = (
     "passes_constraints",
     "constraint_reason",
     "run_dir",
+    "fault_trace_path",
+    "pattern_trace_path",
 )
 
 

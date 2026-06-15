@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import csv
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -96,6 +97,8 @@ def run_atalanta(config: AtalantaRunConfig) -> dict[str, Any]:
     stderr_file = run_dir / "stderr.txt"
     metadata_file = run_dir / "metadata.json"
     result_file = run_dir / "result.json"
+    fault_trace_file = run_dir / f"{test_file.name}.faulttrace.csv"
+    pattern_trace_file = run_dir / f"{test_file.name}.patterntrace.csv"
 
     command = [str(binary), "-t", test_file.name]
     if config.create_log:
@@ -142,6 +145,8 @@ def run_atalanta(config: AtalantaRunConfig) -> dict[str, Any]:
     parsed = parse_atalanta_output(parse_source)
     stderr_text = stderr_text.strip()
     success = returncode == 0 and parsed.get("fault_coverage") is not None
+    trace_summary = _summarize_fault_trace(fault_trace_file)
+
     parsed.update(
         {
             "run_id": run_id,
@@ -156,12 +161,17 @@ def run_atalanta(config: AtalantaRunConfig) -> dict[str, Any]:
             "stdout_path": str(stdout_file),
             "stderr_path": str(stderr_file),
             "test_path": str(test_file) if test_file.exists() else None,
+            "fault_trace_path": str(fault_trace_file) if fault_trace_file.exists() else None,
+            "pattern_trace_path": str(pattern_trace_file)
+            if pattern_trace_file.exists()
+            else None,
             "vec_path": str(run_dir / f"{benchmark.stem}.vec")
             if (run_dir / f"{benchmark.stem}.vec").exists()
             else None,
             "log_path": str(log_file) if log_file.exists() else None,
         }
     )
+    parsed.update(trace_summary)
     result_file.write_text(json.dumps(parsed, indent=2, sort_keys=True), encoding="utf-8")
 
     metadata = {
@@ -183,3 +193,40 @@ def benchmark_path(name: str, benchmark_dir: str | Path = DEFAULT_BENCHMARK_DIR)
 
     stem = name if name.endswith(".bench") else f"{name}.bench"
     return Path(benchmark_dir).resolve() / stem
+
+
+def _summarize_fault_trace(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+
+    attempts = 0
+    generated_patterns = 0
+    total_detected = 0
+    total_extra_drops = 0
+    max_extra_drops = 0
+
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            attempts += 1
+            pattern_index = int(row.get("generated_pattern_index") or 0)
+            if pattern_index <= 0:
+                continue
+            generated_patterns += 1
+            detected = int(row.get("pattern_detected_faults") or 0)
+            extra_drops = int(row.get("pattern_extra_drops") or 0)
+            total_detected += detected
+            total_extra_drops += extra_drops
+            max_extra_drops = max(max_extra_drops, extra_drops)
+
+    return {
+        "fault_trace_attempts": attempts,
+        "generated_patterns_traced": generated_patterns,
+        "faults_dropped_per_generated_pattern_mean": (
+            total_detected / generated_patterns if generated_patterns else None
+        ),
+        "extra_drops_per_generated_pattern_mean": (
+            total_extra_drops / generated_patterns if generated_patterns else None
+        ),
+        "max_pattern_extra_drops": max_extra_drops if generated_patterns else None,
+    }

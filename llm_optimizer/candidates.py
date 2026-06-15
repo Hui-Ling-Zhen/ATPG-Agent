@@ -188,10 +188,51 @@ ADAPTIVE_COMPACTION_CANDIDATES: tuple[CandidateConfig, ...] = (
 )
 
 
+FAULT_ORDERING_CANDIDATES: tuple[CandidateConfig, ...] = (
+    CandidateConfig(
+        name="ordering_default",
+        options=(),
+        hypothesis="Current Atalanta fault order with adaptive compaction enabled.",
+        source="fault_ordering",
+    ),
+    CandidateConfig(
+        name="easy_first",
+        options=("-O", "easy"),
+        hypothesis="Prioritize high-observability and low-controllability-difficulty faults to produce reusable patterns early.",
+        source="fault_ordering",
+    ),
+    CandidateConfig(
+        name="stem_first",
+        options=("-O", "stem"),
+        hypothesis="Prioritize fanout/stem-related faults to cover structurally influential regions early.",
+        source="fault_ordering",
+    ),
+    CandidateConfig(
+        name="adaptive_c1_ordering_default",
+        options=("-c", "1"),
+        hypothesis="Current best score-balanced compaction setting without explicit fault reordering.",
+        source="fault_ordering",
+    ),
+    CandidateConfig(
+        name="adaptive_c1_easy_first",
+        options=("-c", "1", "-O", "easy"),
+        hypothesis="Combine the current best compaction setting with easy-first fault ordering.",
+        source="fault_ordering",
+    ),
+    CandidateConfig(
+        name="adaptive_c1_stem_first",
+        options=("-c", "1", "-O", "stem"),
+        hypothesis="Combine the current best compaction setting with stem-first fault ordering.",
+        source="fault_ordering",
+    ),
+)
+
+
 CANDIDATE_SETS: dict[str, tuple[CandidateConfig, ...]] = {
     "default": DEFAULT_CANDIDATES,
     "adaptive_compaction": ADAPTIVE_COMPACTION_CANDIDATES,
     "compaction_runtime_local": COMPACTION_RUNTIME_LOCAL_CANDIDATES,
+    "fault_ordering": FAULT_ORDERING_CANDIDATES,
 }
 
 

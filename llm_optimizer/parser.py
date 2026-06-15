@@ -58,6 +58,17 @@ def parse_atalanta_output(text: str) -> dict[str, Any]:
         "aborted_faults": _search_int(r"Number of aborted faults\s*:\s*" + _INT, text),
         "backtrackings": _search_int(r"Total number of backtrackings\s*:\s*" + _INT, text),
         "runtime_seconds": _search_float(r"Total\s*:\s*" + _FLOAT + r"\s*Secs", text),
+        "fault_ordering_mode": (
+            match.group(1).strip()
+            if (
+                match := re.search(
+                    r"Fault ordering mode\s*:\s*([A-Za-z0-9_-]+)",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+            )
+            else None
+        ),
         "adaptive_compaction_enabled": _search_bool(
             r"Adaptive shuffling compaction\s*:\s*(ON|OFF|YES|NO|TRUE|FALSE|1|0)",
             text,

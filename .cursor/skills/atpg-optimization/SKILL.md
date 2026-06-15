@@ -18,6 +18,7 @@ Use this skill when working in ATPG-Agent to improve ATPG runtime, fault coverag
 - Repeated-trial adaptive comparison found `adaptive_c1` (`-c 1`) is the best score-balanced candidate: `runtime_win_count = 3`, `stable_win_count = 2`, `wins = 3`, `average_score_delta_mean = +0.223`, `runtime_delta_mean = -2.442s`, `pattern_delta_mean = +2.111`.
 - `adaptive_default` and `adaptive_c2` prove adaptive early-stop is meaningful as a runtime-first lever: both preserve coverage and reduce runtime on all three benchmarks, but increase pattern count too much.
 - Static learning (`-L`) has not been a clear runtime win in these experiments; treat it as an ablation, not a default improvement.
+- First fault-ordering experiments added `-O easy` and `-O stem`. `stem_first` is the strongest initial ordering signal: against repeated default it achieved `runtime_win_count = 3`, `stable_win_count = 3`, `average_score_delta_mean = +0.420`, `runtime_delta_mean = -6.237s`; against `adaptive_c1` it still achieved `wins = 3`, `stable_win_count = 2`, `average_score_delta_mean = +0.197`.
 
 ## Optimization Principles
 
@@ -32,7 +33,7 @@ Use this skill when working in ATPG-Agent to improve ATPG runtime, fault coverag
 
 The next algorithmic direction is to reuse information from earlier fault solving to improve later fault solving. Do this as an instrument-then-optimize loop:
 
-1. Instrument per-fault solving behavior before changing heuristics:
+1. Use the existing per-fault instrumentation before changing heuristics:
    - fault id, gate, stuck-at value, level, fanout/fanin context
    - solved / redundant / aborted status
    - backtrack count
@@ -40,6 +41,13 @@ The next algorithmic direction is to reuse information from earlier fault solvin
    - generated pattern index
    - whether the resulting pattern detects additional faults
    - contribution to later compaction
+
+The instrumentation writes:
+
+- `<benchmark>.test.faulttrace.csv`: one row per selected fault attempt, including structure, testability, result, backtracks, runtime, generated pattern, and extra dropped faults.
+- `<benchmark>.test.patterntrace.csv`: retained compacted patterns and their origin pattern indices.
+
+`result.json`, baseline CSVs, and candidate CSVs expose `fault_trace_path` and `pattern_trace_path`.
 
 2. Derive transfer features from previous faults:
    - faults solved by the same or nearby pattern
@@ -56,6 +64,21 @@ The next algorithmic direction is to reuse information from earlier fault solvin
    - feed high-utility pattern information into compaction scoring
 
 4. Validate with repeated trials against the unchanged baseline and current best candidate.
+
+## Fault Ordering Guidance
+
+Use `-O stem` as the first ordering baseline. It prioritizes fanout/stem-related faults and has shown the most robust repeated-trial gains so far. Use `-O easy` as an ablation for high-observability / low-controllability-difficulty ordering; it can reduce runtime, but its score is less consistent because pattern count can rise.
+
+When reporting ordering results, include:
+
+- coverage delta
+- aborted fault delta
+- redundant fault delta
+- backtracking delta
+- runtime delta mean/std
+- pattern delta mean/std
+- faults dropped per generated pattern
+- extra drops per generated pattern
 
 ## Compaction-Specific Guidance
 

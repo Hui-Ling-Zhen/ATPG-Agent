@@ -27,14 +27,27 @@ CSV_FIELDS = (
     "pattern_delta_pct",
     "runtime_delta",
     "runtime_delta_pct",
+    "aborted_delta",
+    "redundant_delta",
+    "backtracking_delta",
     "score_delta",
     "wins_benchmark",
     "candidate_patterns",
     "baseline_patterns",
     "candidate_runtime",
     "baseline_runtime",
+    "candidate_aborted_faults",
+    "baseline_aborted_faults",
+    "candidate_redundant_faults",
+    "baseline_redundant_faults",
+    "candidate_backtrackings",
+    "baseline_backtrackings",
     "candidate_score",
     "baseline_score",
+    "fault_ordering_mode",
+    "faults_dropped_per_generated_pattern_mean",
+    "extra_drops_per_generated_pattern_mean",
+    "max_pattern_extra_drops",
     "adaptive_compaction_enabled",
     "adaptive_shuffle_limit",
     "adaptive_compaction_stopped_early",
@@ -64,10 +77,16 @@ STATS_FIELDS = (
     "baseline_runtime_mean",
     "runtime_delta_mean",
     "runtime_delta_pct_mean",
+    "aborted_delta_mean",
+    "redundant_delta_mean",
+    "backtracking_delta_mean",
     "score_mean",
     "score_std",
     "baseline_score_mean",
     "score_delta_mean",
+    "faults_dropped_per_generated_pattern_mean",
+    "extra_drops_per_generated_pattern_mean",
+    "max_pattern_extra_drops_mean",
     "adaptive_enabled_rate",
     "adaptive_shuffle_limit_mean",
     "adaptive_stopped_early_rate",
@@ -91,6 +110,12 @@ SUMMARY_FIELDS = (
     "runtime_delta_std",
     "pattern_delta_mean",
     "pattern_delta_std",
+    "aborted_delta_mean",
+    "redundant_delta_mean",
+    "backtracking_delta_mean",
+    "faults_dropped_per_generated_pattern_mean",
+    "extra_drops_per_generated_pattern_mean",
+    "max_pattern_extra_drops_mean",
     "adaptive_enabled_rate_mean",
     "adaptive_shuffle_limit_mean",
     "adaptive_stopped_early_rate_mean",
@@ -133,6 +158,9 @@ def _baseline_by_benchmark(rows: list[dict[str, Any]]) -> dict[str, dict[str, An
             "fault_coverage": _mean_present(bench_rows, "fault_coverage"),
             "test_patterns": _mean_present(bench_rows, "test_patterns"),
             "runtime_seconds": _mean_present(bench_rows, "runtime_seconds"),
+            "aborted_faults": _mean_present(bench_rows, "aborted_faults"),
+            "redundant_faults": _mean_present(bench_rows, "redundant_faults"),
+            "backtrackings": _mean_present(bench_rows, "backtrackings"),
             "score": _mean_present(bench_rows, "score"),
         }
     return baseline
@@ -163,6 +191,12 @@ def compare_rows(
         base_patterns = _to_float(base.get("test_patterns"))
         cand_runtime = _to_float(row.get("runtime_seconds"))
         base_runtime = _to_float(base.get("runtime_seconds"))
+        cand_aborted = _to_float(row.get("aborted_faults"))
+        base_aborted = _to_float(base.get("aborted_faults"))
+        cand_redundant = _to_float(row.get("redundant_faults"))
+        base_redundant = _to_float(base.get("redundant_faults"))
+        cand_backtrackings = _to_float(row.get("backtrackings"))
+        base_backtrackings = _to_float(base.get("backtrackings"))
         cand_score = _to_float(row.get("score"))
         base_score = _to_float(base.get("score"))
 
@@ -181,6 +215,21 @@ def compare_rows(
         )
         score_delta = (
             cand_score - base_score if cand_score is not None and base_score is not None else None
+        )
+        aborted_delta = (
+            cand_aborted - base_aborted
+            if cand_aborted is not None and base_aborted is not None
+            else None
+        )
+        redundant_delta = (
+            cand_redundant - base_redundant
+            if cand_redundant is not None and base_redundant is not None
+            else None
+        )
+        backtracking_delta = (
+            cand_backtrackings - base_backtrackings
+            if cand_backtrackings is not None and base_backtrackings is not None
+            else None
         )
         coverage_below = bool(coverage_delta is not None and coverage_delta < -1e-6)
         wins = bool(
@@ -205,14 +254,33 @@ def compare_rows(
                 "pattern_delta_pct": _pct_delta(cand_patterns, base_patterns),
                 "runtime_delta": runtime_delta,
                 "runtime_delta_pct": _pct_delta(cand_runtime, base_runtime),
+                "aborted_delta": aborted_delta,
+                "redundant_delta": redundant_delta,
+                "backtracking_delta": backtracking_delta,
                 "score_delta": score_delta,
                 "wins_benchmark": wins,
                 "candidate_patterns": cand_patterns,
                 "baseline_patterns": base_patterns,
                 "candidate_runtime": cand_runtime,
                 "baseline_runtime": base_runtime,
+                "candidate_aborted_faults": cand_aborted,
+                "baseline_aborted_faults": base_aborted,
+                "candidate_redundant_faults": cand_redundant,
+                "baseline_redundant_faults": base_redundant,
+                "candidate_backtrackings": cand_backtrackings,
+                "baseline_backtrackings": base_backtrackings,
                 "candidate_score": cand_score,
                 "baseline_score": base_score,
+                "fault_ordering_mode": row.get("fault_ordering_mode", ""),
+                "faults_dropped_per_generated_pattern_mean": row.get(
+                    "faults_dropped_per_generated_pattern_mean",
+                    "",
+                ),
+                "extra_drops_per_generated_pattern_mean": row.get(
+                    "extra_drops_per_generated_pattern_mean",
+                    "",
+                ),
+                "max_pattern_extra_drops": row.get("max_pattern_extra_drops", ""),
                 "adaptive_compaction_enabled": row.get("adaptive_compaction_enabled", ""),
                 "adaptive_shuffle_limit": row.get("adaptive_shuffle_limit", ""),
                 "adaptive_compaction_stopped_early": row.get(
@@ -285,12 +353,24 @@ def aggregate_repeated_trials(comparisons: list[dict[str, Any]]) -> list[dict[st
         coverage_values = _field_values(successful, "candidate_fault_coverage")
         pattern_values = _field_values(successful, "candidate_patterns")
         runtime_values = _field_values(successful, "candidate_runtime")
+        aborted_delta_values = _field_values(successful, "aborted_delta")
+        redundant_delta_values = _field_values(successful, "redundant_delta")
+        backtracking_delta_values = _field_values(successful, "backtracking_delta")
         score_values = _field_values(successful, "candidate_score")
         adaptive_limit_values = _field_values(successful, "adaptive_shuffle_limit")
         adaptive_min_benefit_values = _field_values(
             successful,
             "adaptive_compaction_min_benefit",
         )
+        faults_dropped_values = _field_values(
+            successful,
+            "faults_dropped_per_generated_pattern_mean",
+        )
+        extra_drops_values = _field_values(
+            successful,
+            "extra_drops_per_generated_pattern_mean",
+        )
+        max_extra_drops_values = _field_values(successful, "max_pattern_extra_drops")
 
         coverage_mean = _mean(coverage_values)
         patterns_mean = _mean(pattern_values)
@@ -369,10 +449,16 @@ def aggregate_repeated_trials(comparisons: list[dict[str, Any]]) -> list[dict[st
                 "baseline_runtime_mean": baseline_runtime,
                 "runtime_delta_mean": runtime_delta_mean,
                 "runtime_delta_pct_mean": _pct_delta(runtime_mean, baseline_runtime),
+                "aborted_delta_mean": _mean(aborted_delta_values),
+                "redundant_delta_mean": _mean(redundant_delta_values),
+                "backtracking_delta_mean": _mean(backtracking_delta_values),
                 "score_mean": score_mean,
                 "score_std": score_std,
                 "baseline_score_mean": baseline_score,
                 "score_delta_mean": score_delta_mean,
+                "faults_dropped_per_generated_pattern_mean": _mean(faults_dropped_values),
+                "extra_drops_per_generated_pattern_mean": _mean(extra_drops_values),
+                "max_pattern_extra_drops_mean": _mean(max_extra_drops_values),
                 "adaptive_enabled_rate": _bool_rate(
                     successful,
                     "adaptive_compaction_enabled",
@@ -430,6 +516,24 @@ def summarize_stats(stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 ),
                 "pattern_delta_std": _std(
                     [float(row["pattern_delta_mean"]) for row in rows if row.get("pattern_delta_mean") is not None]
+                ),
+                "aborted_delta_mean": _mean(
+                    [float(row["aborted_delta_mean"]) for row in rows if row.get("aborted_delta_mean") is not None]
+                ),
+                "redundant_delta_mean": _mean(
+                    [float(row["redundant_delta_mean"]) for row in rows if row.get("redundant_delta_mean") is not None]
+                ),
+                "backtracking_delta_mean": _mean(
+                    [float(row["backtracking_delta_mean"]) for row in rows if row.get("backtracking_delta_mean") is not None]
+                ),
+                "faults_dropped_per_generated_pattern_mean": _mean(
+                    [float(row["faults_dropped_per_generated_pattern_mean"]) for row in rows if row.get("faults_dropped_per_generated_pattern_mean") is not None]
+                ),
+                "extra_drops_per_generated_pattern_mean": _mean(
+                    [float(row["extra_drops_per_generated_pattern_mean"]) for row in rows if row.get("extra_drops_per_generated_pattern_mean") is not None]
+                ),
+                "max_pattern_extra_drops_mean": _mean(
+                    [float(row["max_pattern_extra_drops_mean"]) for row in rows if row.get("max_pattern_extra_drops_mean") is not None]
                 ),
                 "adaptive_enabled_rate_mean": _mean(
                     [float(row["adaptive_enabled_rate"]) for row in rows if row.get("adaptive_enabled_rate") is not None]

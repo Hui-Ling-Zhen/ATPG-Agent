@@ -161,13 +161,17 @@ level g_test_vectors[MAXTEST / 10][MAXPI + 1];
 level g_test_vectors1[MAXTEST / 10][MAXPI + 1];
 level g_test_store[MAXTEST / 10][MAXPI + 1];
 level g_test_store1[MAXTEST / 10][MAXPI + 1];
+int g_iPatternOriginVectors[MAXTEST / 10][BITSIZE];
+int g_iPatternOriginStore[MAXTEST / 10][BITSIZE];
 
 
 /* default parameters setting */
 char g_strCctPathFileName[FILENAME_MAX] = "", g_strTestFileName[FILENAME_MAX] = "", g_strLogFileName[FILENAME_MAX] = "", g_strVecFileName[FILENAME_MAX] = "";
+char g_strFaultTraceFileName[FILENAME_MAX] = "", g_strPatternTraceFileName[FILENAME_MAX] = "";
 char g_strFaultFileName[FILENAME_MAX] = "";
 char g_strCctFileName[FILENAME_MAX] = "";
 char nameufaults[MAXSTRING] = "";
+char g_strFaultOrderMode[MAXSTRING] = "default";
 char inputmode = 'd';		/* default mode */
 char rptmode = 'y';		/* RPT mode ON */
 char logmode = 'n';		/* LOG off */
@@ -195,7 +199,73 @@ char rfaultmode = 'n';  		  /* Write out redundant faults */
 
 FILE *fpFaultFile;
 FILE *fpUndetFaultFile;
+FILE *g_fpFaultTraceFile;
+FILE *g_fpPatternTraceFile;
 double lfMemSize;
+
+static GATEPTR get_fault_site(FAULTPTR pFault)
+{
+	return((pFault->line == OUTFAULT) ? pFault->gate : pFault->gate->inList[pFault->line]);
+}
+
+static int get_fault_control_difficulty(FAULTPTR pFault)
+{
+	GATEPTR pSite = get_fault_site(pFault);
+	return((pFault->type == SA0) ? pSite->cont1 : pSite->cont0);
+}
+
+static long get_fault_priority(FAULTPTR pFault)
+{
+	GATEPTR pGate = pFault->gate;
+	GATEPTR pSite = get_fault_site(pFault);
+
+	if (strcmp(g_strFaultOrderMode, "easy") == 0)
+	{
+		/* Lower dpo means higher observability; lower controllability is easier. */
+		return(100000000L - (long)pSite->dpo * 10000L - (long)get_fault_control_difficulty(pFault) * 100L + pSite->outCount);
+	}
+	if (strcmp(g_strFaultOrderMode, "stem") == 0)
+	{
+		int iStemLike = (pGate->outCount > 1 || pSite->outCount > 1);
+		return((long)iStemLike * 100000000L + (long)(pGate->outCount + pSite->outCount) * 100000L - (long)pSite->dpo * 100L);
+	}
+	return(0L);
+}
+
+static int compare_fault_priority(const void *pLeft, const void *pRight)
+{
+	FAULTPTR pFaultLeft = *(FAULTPTR *)pLeft;
+	FAULTPTR pFaultRight = *(FAULTPTR *)pRight;
+	long iPriorityLeft = get_fault_priority(pFaultLeft);
+	long iPriorityRight = get_fault_priority(pFaultRight);
+
+	if (iPriorityLeft < iPriorityRight)
+	{
+		return(-1);
+	}
+	if (iPriorityLeft > iPriorityRight)
+	{
+		return(1);
+	}
+	/* Preserve deterministic ordering for ties. testgen scans from the end. */
+	return(0);
+}
+
+static void apply_fault_ordering(int iNoFault)
+{
+	if (strcmp(g_strFaultOrderMode, "default") == 0)
+	{
+		return;
+	}
+	if (strcmp(g_strFaultOrderMode, "easy") != 0 && strcmp(g_strFaultOrderMode, "stem") != 0)
+	{
+		fprintf(stderr, "Warning: unknown fault ordering mode %s; using default order\n", g_strFaultOrderMode);
+		strcpy(g_strFaultOrderMode, "default");
+		return;
+	}
+	qsort(g_pFaultList, iNoFault, sizeof(FAULTPTR), compare_fault_priority);
+	fprintf(stdout, "Fault ordering mode                         : %s\n", g_strFaultOrderMode);
+}
 
 // /*------main: Main program of atalanta---------------------------*/
 int main(int argc, char *argv[]) //for windows
@@ -338,6 +408,26 @@ int main(int argc, char *argv[]) //for windows
 		fprintf(stderr, "Fatal error: %s file open error\n", g_strTestFileName);
 		exit(0);
 	}
+
+	strcpy(g_strFaultTraceFileName, g_strTestFileName);
+	strcat(g_strFaultTraceFileName, ".faulttrace.csv");
+	if ((g_fpFaultTraceFile = fopen(g_strFaultTraceFileName, "w")) == NULL)
+	{
+		fprintf(stderr, "Fatal error: %s file open error\n", g_strFaultTraceFileName);
+		exit(0);
+	}
+	fprintf(g_fpFaultTraceFile,
+		"phase,selection_order,fault_index,fault_gate,fault_site,line,stuck_at,gate_dpi,gate_dpo,site_dpi,site_dpo,is_stem,is_fanout,fanout_count,fanin_count,site_fanout_count,site_fanin_count,gate_cont0,gate_cont1,site_cont0,site_cont1,result,fan_state,backtracks,fan_runtime,generated_pattern_index,pattern_detected_faults,pattern_extra_drops,compaction_origin_key\n");
+
+	strcpy(g_strPatternTraceFileName, g_strTestFileName);
+	strcat(g_strPatternTraceFileName, ".patterntrace.csv");
+	if ((g_fpPatternTraceFile = fopen(g_strPatternTraceFileName, "w")) == NULL)
+	{
+		fprintf(stderr, "Fatal error: %s file open error\n", g_strPatternTraceFileName);
+		exit(0);
+	}
+	fprintf(g_fpPatternTraceFile,
+		"engine,compaction_mode,shuffle_round,compacted_pattern_index,origin_pattern_index,detected_faults,retained\n");
 
 	if (logmode == 'y')
 	{
@@ -528,6 +618,7 @@ int main(int argc, char *argv[]) //for windows
 	}
 
 	setGateTestability(g_iNoGate);
+	apply_fault_ordering(g_iNoFault);
 
 	for (i = 0; i < g_iNoGate; i++)
 	{
@@ -759,6 +850,8 @@ int main(int argc, char *argv[]) //for windows
 	}
 
 	fclose(g_fpTestFile);
+	fclose(g_fpFaultTraceFile);
+	fclose(g_fpPatternTraceFile);
 	if (logmode == 'y')
 	{
 		fclose(g_fpLogFile);
@@ -795,6 +888,8 @@ int read_option(char option, char *array[], int i, int n)
 		compact = 'n'; g_iMaxCompact = 0; break;
 	case 'c':
 		sscanf(array[++i], "%d", &g_iMaxCompact); break;
+	case 'O':
+		strcpy(g_strFaultOrderMode, array[++i]); break;
 	case 'b':
 		sscanf(array[++i], "%d", &g_iMaxBackTrack1); break;
 	case 'B':

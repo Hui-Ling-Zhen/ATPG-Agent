@@ -365,6 +365,101 @@ The adaptive early-stop policy itself is confirmed to trigger for the default `-
 
 This shows that adaptive shuffle stopping can be a strong runtime-first control knob: it preserves coverage while cutting substantial runtime from the default compaction path. The trade-off is that the first policy stops too aggressively and leaves more patterns after compaction. Therefore, the next optimization target is not whether adaptive stopping works, but how to tune its cost function so it keeps most of the runtime gain while reducing the pattern-count penalty.
 
+### Fault Ordering Observability
+
+The first step toward fault-ordering optimization is now implemented as instrumentation only. It does not change the current fault order. The active fault-oriented ATPG traversal is in `atalanta-core/sim.cpp::testgen()`: Atalanta scans `g_pFaultList` backward, selects the next `UNDETECTED` fault, runs `fan()` in phase 1 or `fan1()` in phase 2, then updates the fault status after fault simulation.
+
+Each run now writes two trace files next to the generated `.test` file:
+
+- `<benchmark>.test.faulttrace.csv`
+- `<benchmark>.test.patterntrace.csv`
+
+`result.json` records these paths as `fault_trace_path` and `pattern_trace_path`, and the baseline/candidate CSV writers include the same fields for batch experiments.
+
+`faulttrace.csv` records one row per selected fault attempt:
+
+- fault identity: fault index, gate, fault site, input/output line, stuck-at value
+- structural features: gate/site level from PI/PO, fanout count, fanin count, stem/fanout flags
+- testability features: `cont0` / `cont1` for the gate and fault site
+- solving result: detected, redundant, or aborted
+- solving cost: FAN state, backtracks, FAN runtime, phase 1 vs phase 2
+- pattern value: generated pattern index, faults detected by that pattern, and extra dropped faults
+
+`patterntrace.csv` records which generated pattern origins survive compaction:
+
+- compaction engine and mode
+- shuffle round
+- compacted pattern index
+- origin pattern index
+- detected faults for the retained pattern
+
+A smoke run confirmed both traces are produced:
+
+```bash
+python3 llm_optimizer/experiments/run_baseline.py \
+  --benchmarks pcitc \
+  --timeout-seconds 75 \
+  --output results/baseline/fault_trace_smoke.csv
+```
+
+Example `faulttrace.csv` rows show that early PI/stem faults can drop many faults at once. For example, the first selected `pcitc` fault generated pattern `1`, detected `17506` faults, and therefore had `17505` extra drops. This is exactly the kind of signal needed for later fault ordering strategies.
+
+This instrumentation enables ordering candidates such as `easy_first`, `stem_first`, `high_observability_first`, `hard_controllability_first`, and `history_aware`.
+
+### Fault Ordering Repeated-Trial Comparison
+
+The first two white-box fault-ordering strategies are implemented through the new `-O` option:
+
+- `-O easy`: prioritize faults with high observability and low controllability difficulty. In the current implementation, low `dpo` and low required controllability are treated as easier.
+- `-O stem`: prioritize fanout/stem-related faults. In the current implementation, faults on gates or sites with higher fanout are moved earlier.
+
+Because `testgen()` scans `g_pFaultList` from the end toward the beginning, the implementation sorts the array so higher-priority faults appear later in the array and are selected first. The gate-local fault linked lists are left unchanged.
+
+The built-in candidate set is `fault_ordering`:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set fault_ordering \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --output results/candidates/fault_ordering_results.csv
+```
+
+The experiment was compared against both the repeated default baseline and the current `adaptive_c1` baseline:
+
+```bash
+PYTHONPATH="$(pwd)" python3 -m llm_optimizer.compare \
+  --baseline results/baseline/default_repeated_baseline.csv \
+  --candidates results/candidates/fault_ordering_results.csv \
+  --output-dir results/comparisons/fault_ordering_vs_default_full_metrics
+
+PYTHONPATH="$(pwd)" python3 -m llm_optimizer.compare \
+  --baseline results/baseline/adaptive_c1_repeated_baseline.csv \
+  --candidates results/candidates/fault_ordering_results.csv \
+  --output-dir results/comparisons/fault_ordering_vs_adaptive_c1_full_metrics
+```
+
+The comparison now covers fault coverage, aborted faults, redundant faults, total backtrackings, runtime, patterns before/after compaction, and trace-derived pattern reuse metrics.
+
+Against the repeated default baseline, `stem_first` is the strongest candidate:
+
+| Candidate | Runtime wins | Stable wins | Wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean | Aborted delta | Backtracking delta | Drops / generated pattern |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `stem_first` | 3 | 3 | 3 | +0.420 | -6.237 | +20.556 | -1.667 | +55.667 | 208.518 |
+| `adaptive_c1_stem_first` | 3 | 3 | 3 | +0.340 | -2.331 | -10.444 | -1.667 | +55.667 | 208.518 |
+| `easy_first` | 3 | 2 | 2 | +0.090 | -5.742 | +48.556 | -1.333 | +31.667 | 206.275 |
+
+Against the current `adaptive_c1` baseline, `stem_first` still wins overall:
+
+| Candidate | Runtime wins | Stable wins | Wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean | Aborted delta | Backtracking delta | Drops / generated pattern |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `stem_first` | 3 | 2 | 3 | +0.197 | -3.794 | +18.444 | -1.667 | +55.667 | 208.518 |
+| `adaptive_c1_stem_first` | 1 | 2 | 2 | +0.117 | +0.111 | -12.556 | -1.667 | +55.667 | 208.518 |
+| `easy_first` | 3 | 2 | 2 | -0.133 | -3.300 | +46.444 | -1.333 | +31.667 | 206.275 |
+
+The main result is that `stem_first` is a real ordering signal. It preserves coverage, reduces aborted faults on average, improves runtime on all three benchmarks, and remains positive even when compared against `adaptive_c1`. The trade-off is that the pure `stem_first` candidate can increase final pattern count, while `adaptive_c1_stem_first` reduces pattern count versus `adaptive_c1` but loses some runtime advantage. This suggests the next ordering step should combine stem priority with a pattern-count guard or a hybrid score that balances stem influence and easy detectability.
+
 ## Notes
 
 - `atalanta-core/` should stay close to the original Atalanta source until the evaluation loop is reliable.
