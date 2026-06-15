@@ -99,11 +99,15 @@ def run_atalanta(config: AtalantaRunConfig) -> dict[str, Any]:
     result_file = run_dir / "result.json"
     fault_trace_file = run_dir / f"{test_file.name}.faulttrace.csv"
     pattern_trace_file = run_dir / f"{test_file.name}.patterntrace.csv"
+    copied_fault_profile_file: Path | None = None
 
     command = [str(binary), "-t", test_file.name]
     if config.create_log:
         command.extend(["-l", log_file.name])
-    command.extend(config.options)
+    materialized_options = _materialize_option_files(config.options, run_dir)
+    if "-F" in materialized_options:
+        copied_fault_profile_file = run_dir / materialized_options[materialized_options.index("-F") + 1]
+    command.extend(materialized_options)
     command.append(local_benchmark.name)
 
     started_at = datetime.now().isoformat(timespec="seconds")
@@ -154,6 +158,7 @@ def run_atalanta(config: AtalantaRunConfig) -> dict[str, Any]:
             "benchmark": benchmark.name,
             "benchmark_path": str(benchmark),
             "options": list(config.options),
+            "materialized_options": list(materialized_options),
             "returncode": returncode,
             "success": success,
             "timed_out": timed_out,
@@ -162,6 +167,9 @@ def run_atalanta(config: AtalantaRunConfig) -> dict[str, Any]:
             "stderr_path": str(stderr_file),
             "test_path": str(test_file) if test_file.exists() else None,
             "fault_trace_path": str(fault_trace_file) if fault_trace_file.exists() else None,
+            "fault_profile_copied_path": str(copied_fault_profile_file)
+            if copied_fault_profile_file
+            else None,
             "pattern_trace_path": str(pattern_trace_file)
             if pattern_trace_file.exists()
             else None,
@@ -193,6 +201,27 @@ def benchmark_path(name: str, benchmark_dir: str | Path = DEFAULT_BENCHMARK_DIR)
 
     stem = name if name.endswith(".bench") else f"{name}.bench"
     return Path(benchmark_dir).resolve() / stem
+
+
+def _materialize_option_files(options: tuple[str, ...], run_dir: Path) -> tuple[str, ...]:
+    materialized: list[str] = []
+    index = 0
+    while index < len(options):
+        option = options[index]
+        if option == "-F" and index + 1 < len(options):
+            source = Path(options[index + 1])
+            if not source.is_absolute():
+                source = (REPO_ROOT / source).resolve()
+            if not source.exists():
+                raise FileNotFoundError(f"Fault history profile does not exist: {source}")
+            destination = run_dir / source.name
+            shutil.copy2(source, destination)
+            materialized.extend(["-F", destination.name])
+            index += 2
+            continue
+        materialized.append(option)
+        index += 1
+    return tuple(materialized)
 
 
 def _summarize_fault_trace(path: Path) -> dict[str, Any]:

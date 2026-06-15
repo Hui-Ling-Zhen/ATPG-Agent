@@ -228,11 +228,40 @@ FAULT_ORDERING_CANDIDATES: tuple[CandidateConfig, ...] = (
 )
 
 
+FAULT_TO_FAULT_LEARNING_CANDIDATES: tuple[CandidateConfig, ...] = (
+    CandidateConfig(
+        name="history_ordering",
+        options=("-O", "history"),
+        hypothesis="Use an offline fault-to-fault profile to prioritize high-value faults and adapt per-fault backtrack budgets.",
+        source="fault_to_fault_learning",
+    ),
+    CandidateConfig(
+        name="history_ordering_c1",
+        options=("-c", "1", "-O", "history"),
+        hypothesis="Combine history-based ordering with the current score-balanced compaction setting.",
+        source="fault_to_fault_learning",
+    ),
+    CandidateConfig(
+        name="stem_first_reference",
+        options=("-O", "stem"),
+        hypothesis="Reference ordering baseline from the first fault-ordering experiment.",
+        source="fault_to_fault_learning",
+    ),
+    CandidateConfig(
+        name="adaptive_c1_stem_reference",
+        options=("-c", "1", "-O", "stem"),
+        hypothesis="Reference stem ordering with the current score-balanced compaction setting.",
+        source="fault_to_fault_learning",
+    ),
+)
+
+
 CANDIDATE_SETS: dict[str, tuple[CandidateConfig, ...]] = {
     "default": DEFAULT_CANDIDATES,
     "adaptive_compaction": ADAPTIVE_COMPACTION_CANDIDATES,
     "compaction_runtime_local": COMPACTION_RUNTIME_LOCAL_CANDIDATES,
     "fault_ordering": FAULT_ORDERING_CANDIDATES,
+    "fault_to_fault_learning": FAULT_TO_FAULT_LEARNING_CANDIDATES,
 }
 
 

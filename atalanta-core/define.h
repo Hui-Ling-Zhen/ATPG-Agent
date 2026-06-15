@@ -194,6 +194,8 @@ typedef struct FAULT
 	int line;		/* faulty line, -1 if output fault */
 	fault_type type;	/* fault type */
 	int detected;	/* detected or not */
+	double history_score; /* offline fault-to-fault ordering score */
+	int history_backtrack_budget; /* per-fault FAN backtrack budget from profile */
 	level observe;		/* detectability */
 	struct FAULT *next;	/* pointer to the next fault */
 	struct FAULT *previous;	/* pointer to the previous fault */

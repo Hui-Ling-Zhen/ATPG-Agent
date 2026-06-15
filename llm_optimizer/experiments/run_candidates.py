@@ -55,6 +55,7 @@ CSV_FIELDS = (
     "backtrackings",
     "runtime_seconds",
     "fault_ordering_mode",
+    "fault_history_profile",
     "fault_trace_attempts",
     "generated_patterns_traced",
     "faults_dropped_per_generated_pattern_mean",
@@ -108,6 +109,7 @@ def run_candidates(
     *,
     timeout_seconds: int | None,
     trials: int,
+    profile_dir: Path | None = None,
 ) -> Path:
     if trials < 1:
         raise ValueError("trials must be >= 1")
@@ -118,11 +120,12 @@ def run_candidates(
     for candidate in candidates:
         for bench in benchmarks:
             for trial_index in range(1, trials + 1):
+                options = _options_with_profile(candidate.options, bench, profile_dir)
                 record = run_atalanta(
                     AtalantaRunConfig(
                         benchmark=benchmark_path(bench, DEFAULT_BENCHMARK_DIR),
                         label=f"candidate_{candidate.name}_trial{trial_index}",
-                        options=candidate.options,
+                        options=options,
                         timeout_seconds=timeout_seconds,
                         metadata={
                             "experiment": "candidates",
@@ -146,6 +149,19 @@ def run_candidates(
     output_path = _non_overwriting_path(output_csv)
     _write_csv(output_path, rows)
     return output_path
+
+
+def _options_with_profile(
+    options: tuple[str, ...],
+    benchmark: str,
+    profile_dir: Path | None,
+) -> tuple[str, ...]:
+    if profile_dir is None or "history" not in options or "-F" in options:
+        return options
+    profile_path = (profile_dir / f"{Path(benchmark).stem}_fault_profile.json").resolve()
+    if not profile_path.exists():
+        raise FileNotFoundError(f"Missing history profile for {benchmark}: {profile_path}")
+    return (*options, "-F", str(profile_path))
 
 
 def main() -> int:
@@ -190,6 +206,11 @@ def main() -> int:
         default=1,
         help="Repeated trials per (candidate, benchmark) pair.",
     )
+    parser.add_argument(
+        "--profile-dir",
+        type=Path,
+        help="Directory containing <benchmark>_fault_profile.json files for -O history candidates.",
+    )
     args = parser.parse_args()
 
     if args.candidates_json:
@@ -205,6 +226,7 @@ def main() -> int:
         args.output,
         timeout_seconds=args.timeout_seconds,
         trials=args.trials,
+        profile_dir=args.profile_dir,
     )
     print(f"Wrote candidate results to {output_path}")
     return 0

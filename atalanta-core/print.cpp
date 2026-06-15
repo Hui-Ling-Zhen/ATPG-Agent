@@ -61,6 +61,7 @@
 extern char rptmode;
 extern char compact;
 extern char g_strFaultOrderMode[];
+extern char g_strFaultProfileFileName[];
 extern int g_iRPTStopLimit, iseed, g_iMaxCompact;
 extern char g_cAdaptiveCompact;
 extern int g_iAdaptiveCompactEffectiveLimit;
@@ -157,6 +158,10 @@ void print_atpg_result(FILE *fpFile, char *strCctFileName, int iNoGate, int iNoP
 	}
 	fprintf(fpFile, "   Initial random number generator seed      : %d\n", iseed);
 	fprintf(fpFile, "   Fault ordering mode                       : %s\n", g_strFaultOrderMode);
+	if (g_strFaultProfileFileName[0] != '\0')
+	{
+		fprintf(fpFile, "   Fault history profile                     : %s\n", g_strFaultProfileFileName);
+	}
 	fprintf(fpFile, "   Test pattern compaction Mode              : ");
 	if (compact == 'n')
 	{

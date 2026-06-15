@@ -19,6 +19,8 @@ Use this skill when working in ATPG-Agent to improve ATPG runtime, fault coverag
 - `adaptive_default` and `adaptive_c2` prove adaptive early-stop is meaningful as a runtime-first lever: both preserve coverage and reduce runtime on all three benchmarks, but increase pattern count too much.
 - Static learning (`-L`) has not been a clear runtime win in these experiments; treat it as an ablation, not a default improvement.
 - First fault-ordering experiments added `-O easy` and `-O stem`. `stem_first` is the strongest initial ordering signal: against repeated default it achieved `runtime_win_count = 3`, `stable_win_count = 3`, `average_score_delta_mean = +0.420`, `runtime_delta_mean = -6.237s`; against `adaptive_c1` it still achieved `wins = 3`, `stable_win_count = 2`, `average_score_delta_mean = +0.197`.
+- Offline fault-to-fault history profiles are now supported. `llm_optimizer/fault_profile.py` reads `faulttrace.csv` / `patterntrace.csv`, generates `results/profiles/<benchmark>_fault_profile.json`, and Atalanta can consume the profile through `-O history -F <profile.json>`.
+- `-O history` uses profile scores for fault ordering and profile-suggested per-fault backtrack budgets to override the global `g_iMaxBackTrack1` on selected faults. A pcitc smoke test loaded `pcitc_fault_profile.json` successfully and ran with `fault_ordering_mode = history`.
 
 ## Optimization Principles
 
@@ -63,11 +65,30 @@ The instrumentation writes:
    - reuse learned implication hints only when they are local and explainable
    - feed high-utility pattern information into compaction scoring
 
-4. Validate with repeated trials against the unchanged baseline and current best candidate.
+4. Prefer offline profile policies before invasive C++ inference changes:
+   - Generate `results/profiles/<benchmark>_fault_profile.json` from completed traces.
+   - Use `-O history -F <profile.json>` for the next run.
+   - Let the LLM/agent tune `alpha`, `beta`, `gamma`, `delta`, and `epsilon` in the profile builder, not execute arbitrary commands.
+   - Keep `stem_first` and `adaptive_c1` as references.
+
+5. Validate with repeated trials against the unchanged baseline and current best candidate.
 
 ## Fault Ordering Guidance
 
 Use `-O stem` as the first ordering baseline. It prioritizes fanout/stem-related faults and has shown the most robust repeated-trial gains so far. Use `-O easy` as an ablation for high-observability / low-controllability-difficulty ordering; it can reduce runtime, but its score is less consistent because pattern count can rise.
+
+Use `-O history -F results/profiles/<benchmark>_fault_profile.json` when testing fault-to-fault learning. The score is:
+
+```text
+score =
+  + alpha   * historical_extra_drops
+  + beta    * compaction_retained_rate
+  - gamma   * historical_backtracks
+  - delta   * historical_abort_rate
+  + epsilon * stem_bonus
+```
+
+The built-in candidate set is `fault_to_fault_learning`; pass `--profile-dir results/profiles` so `run_candidates.py` can attach benchmark-specific profiles.
 
 When reporting ordering results, include:
 
@@ -107,6 +128,28 @@ python3 llm_optimizer/experiments/run_candidates.py \
   --trials 3 \
   --timeout-seconds 75 \
   --output results/candidates/adaptive_compaction_results.csv
+```
+
+Build a history profile from a completed run:
+
+```bash
+python3 -m llm_optimizer.fault_profile \
+  --fault-trace results/runs/<run_id>/<benchmark>.test.faulttrace.csv \
+  --pattern-trace results/runs/<run_id>/<benchmark>.test.patterntrace.csv \
+  --benchmark pcitc \
+  --output results/profiles/pcitc_fault_profile.json
+```
+
+Run history-based fault-to-fault candidates:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set fault_to_fault_learning \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --profile-dir results/profiles \
+  --output results/candidates/fault_to_fault_learning_results.csv
 ```
 
 Compare against repeated default:

@@ -69,6 +69,17 @@ def parse_atalanta_output(text: str) -> dict[str, Any]:
             )
             else None
         ),
+        "fault_history_profile": (
+            match.group(1).strip()
+            if (
+                match := re.search(
+                    r"Fault history profile\s*:\s*(.+)",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+            )
+            else None
+        ),
         "adaptive_compaction_enabled": _search_bool(
             r"Adaptive shuffling compaction\s*:\s*(ON|OFF|YES|NO|TRUE|FALSE|1|0)",
             text,

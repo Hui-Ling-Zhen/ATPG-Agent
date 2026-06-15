@@ -81,6 +81,7 @@ extern status g_iUpdateFlag;
 extern level g_PIValues[];
 extern char _MODE_SIM, logmode, fillmode;
 extern char compact;
+extern char g_strFaultOrderMode[];
 extern int g_iMaxCompact;
 extern char g_cAdaptiveCompact;
 extern int g_iAdaptiveCompactEffectiveLimit;
@@ -205,7 +206,7 @@ static const char *fault_result_to_string(int iState)
 }
 
 static void log_fault_trace(int iPhase, int iSelectionOrder, int iFaultIndex, FAULTPTR pFault, int iState,
-	int iBacktracks, double lfFanRuntime, int iGeneratedPatternIndex, int iDetectedByPattern)
+	int iBacktracks, int iBacktrackBudget, double lfFanRuntime, int iGeneratedPatternIndex, int iDetectedByPattern)
 {
 	GATEPTR pGate = pFault->gate;
 	GATEPTR pSite = (pFault->line == OUTFAULT) ? pGate : pGate->inList[pFault->line];
@@ -219,7 +220,7 @@ static void log_fault_trace(int iPhase, int iSelectionOrder, int iFaultIndex, FA
 	}
 
 	fprintf(g_fpFaultTraceFile,
-		"%d,%d,%d,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%.6lf,%d,%d,%d,%d\n",
+		"%d,%d,%d,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%d,%.6lf,%d,%d,%d,%d\n",
 		iPhase,
 		iSelectionOrder,
 		iFaultIndex,
@@ -244,6 +245,7 @@ static void log_fault_trace(int iPhase, int iSelectionOrder, int iFaultIndex, FA
 		fault_result_to_string(iState),
 		iState,
 		iBacktracks,
+		iBacktrackBudget,
 		lfFanRuntime,
 		iGeneratedPatternIndex,
 		iDetectedByPattern,
@@ -633,6 +635,7 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 	int iSelectionOrder = 0;
 	int iGeneratedPatternIndex = 0;
 	int iDetectedByPattern = 0;
+	int iFaultBacktrackBudget = 0;
 	FAULTTYPE *pLastUndetectedFault;
 	bool bDone;
 	GATEPTR pLastUndetectedGate;
@@ -715,20 +718,25 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 		}
 		fprintf(stderr, "iLastUndetectedFault=%d\n", iLastUndetectedFault);
 		getTime(&lfMinutes, &lfSeconds, &lfRunTime1);
+		iFaultBacktrackBudget = iMaxBackTrack;
+		if (strcmp(g_strFaultOrderMode, "history") == 0 && pLastUndetectedFault->history_backtrack_budget > 0)
+		{
+			iFaultBacktrackBudget = pLastUndetectedFault->history_backtrack_budget;
+		}
 
 
 		/* test pattern generation using fan */
 		if (bPhase2 == FALSE) //Default !!
 		{
 			//iMaxBackTrack == 10
-			iState = fan(iNoGate, iMaxLevelAdd2, iNoPI, iNoPO, pLastUndetectedFault, iMaxBackTrack, &iNoBackTrack);
+			iState = fan(iNoGate, iMaxLevelAdd2, iNoPI, iNoPO, pLastUndetectedFault, iFaultBacktrackBudget, &iNoBackTrack);
 			//Output: iState & g_iPatternsForOneTime & iNoBackTrack & g_net[i] (PI, Test Patterns !!!)
 		}
 		else //bPhase2 == TRUE
 		{
 			//STOP*****************************************STOP
 			//iMaxBackTrack == xx
-			iState = fan1(iNoGate, iMaxLevelAdd2, iNoPI, iNoPO, pLastUndetectedFault, iMaxBackTrack, &iNoBackTrack);
+			iState = fan1(iNoGate, iMaxLevelAdd2, iNoPI, iNoPO, pLastUndetectedFault, iFaultBacktrackBudget, &iNoBackTrack);
 			//Output: iState & g_iPatternsForOneTime & iNoBackTrack & g_net[i] (PI, Test Patterns !!!)
 		}
 		
@@ -882,7 +890,7 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 			pLastUndetectedFault->detected = PROCESSED;
 		}
 		log_fault_trace(bPhase2 ? 2 : 1, iSelectionOrder, iLastUndetectedFault, pLastUndetectedFault, iState,
-			iNoBackTrack, lfRunTime2 - lfRunTime1, iGeneratedPatternIndex, iDetectedByPattern);
+			iNoBackTrack, iFaultBacktrackBudget, lfRunTime2 - lfRunTime1, iGeneratedPatternIndex, iDetectedByPattern);
 	}
 
 	return(iNoDetected);

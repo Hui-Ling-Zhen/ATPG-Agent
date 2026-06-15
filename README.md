@@ -460,6 +460,67 @@ Against the current `adaptive_c1` baseline, `stem_first` still wins overall:
 
 The main result is that `stem_first` is a real ordering signal. It preserves coverage, reduces aborted faults on average, improves runtime on all three benchmarks, and remains positive even when compared against `adaptive_c1`. The trade-off is that the pure `stem_first` candidate can increase final pattern count, while `adaptive_c1_stem_first` reduces pattern count versus `adaptive_c1` but loses some runtime advantage. This suggests the next ordering step should combine stem priority with a pattern-count guard or a hybrid score that balances stem influence and easy detectability.
 
+### Fault-to-Fault History Policy
+
+The next fault-ordering step is now implemented as an offline history policy. This keeps the LLM/agent role clean: it can adjust the scoring weights, while execution and signoff still happen through deterministic scripts and Atalanta runs.
+
+The profile builder reads `faulttrace.csv` and `patterntrace.csv`, aggregates each fault's historical value/cost, and writes `results/profiles/<benchmark>_fault_profile.json`:
+
+```bash
+python3 -m llm_optimizer.fault_profile \
+  --fault-trace results/runs/<run_id>/<benchmark>.test.faulttrace.csv \
+  --pattern-trace results/runs/<run_id>/<benchmark>.test.patterntrace.csv \
+  --benchmark pcitc \
+  --output results/profiles/pcitc_fault_profile.json
+```
+
+Each profile row includes:
+
+- average extra drops per generated pattern
+- average backtracks
+- abort and redundant rates
+- compaction retained rate
+- stem/fanout bonus
+- final history score
+- suggested per-fault backtrack budget
+
+The score is:
+
+```text
+score =
+  + alpha   * historical_extra_drops
+  + beta    * compaction_retained_rate
+  - gamma   * historical_backtracks
+  - delta   * historical_abort_rate
+  + epsilon * stem_bonus
+```
+
+Atalanta can then use the profile with `-O history -F <profile.json>`. The new `-F` option passes the profile to the core. `run_candidates.py` can also attach benchmark-specific profiles automatically:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set fault_to_fault_learning \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --profile-dir results/profiles \
+  --output results/candidates/fault_to_fault_learning_results.csv
+```
+
+Internally, `-O history` sorts faults by the profile score and uses the profile's `backtrack_budget` field as a per-fault override for the global `g_iMaxBackTrack1` during phase-1 FAN search. This implements the first adaptive backtrack policy:
+
+- high-value stem / extra-drop faults can receive a larger budget
+- historically aborted and low-value faults receive a very small budget
+- ordinary faults keep the default budget
+
+A pcitc smoke test confirmed that `-O history` loads the profile and runs successfully:
+
+| Candidate | Coverage | Patterns | Aborted | Backtrackings | Runtime (s) | Fault ordering | Profile |
+|---|---:|---:|---:|---:|---:|---|---|
+| `history_ordering` | 99.826 | 5950 | 1 | 62 | 10.050 | `history` | `pcitc_fault_profile.json` |
+
+This is a smoke result, not a repeated-trial conclusion. The proper next experiment is to compare `fault_to_fault_learning` against both repeated default and `adaptive_c1` baselines, then let the agent tune `alpha/beta/gamma/delta/epsilon` based on the resulting profile and comparison CSVs.
+
 ## Notes
 
 - `atalanta-core/` should stay close to the original Atalanta source until the evaluation loop is reliable.

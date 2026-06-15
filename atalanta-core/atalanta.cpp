@@ -169,6 +169,7 @@ int g_iPatternOriginStore[MAXTEST / 10][BITSIZE];
 char g_strCctPathFileName[FILENAME_MAX] = "", g_strTestFileName[FILENAME_MAX] = "", g_strLogFileName[FILENAME_MAX] = "", g_strVecFileName[FILENAME_MAX] = "";
 char g_strFaultTraceFileName[FILENAME_MAX] = "", g_strPatternTraceFileName[FILENAME_MAX] = "";
 char g_strFaultFileName[FILENAME_MAX] = "";
+char g_strFaultProfileFileName[FILENAME_MAX] = "";
 char g_strCctFileName[FILENAME_MAX] = "";
 char nameufaults[MAXSTRING] = "";
 char g_strFaultOrderMode[MAXSTRING] = "default";
@@ -203,6 +204,13 @@ FILE *g_fpFaultTraceFile;
 FILE *g_fpPatternTraceFile;
 double lfMemSize;
 
+typedef struct history_entry
+{
+	char key[MAXSTRING];
+	double score;
+	int budget;
+} HISTORYENTRY;
+
 static GATEPTR get_fault_site(FAULTPTR pFault)
 {
 	return((pFault->line == OUTFAULT) ? pFault->gate : pFault->gate->inList[pFault->line]);
@@ -212,6 +220,166 @@ static int get_fault_control_difficulty(FAULTPTR pFault)
 {
 	GATEPTR pSite = get_fault_site(pFault);
 	return((pFault->type == SA0) ? pSite->cont1 : pSite->cont0);
+}
+
+static void get_fault_key(FAULTPTR pFault, char *pcKey, int iKeySize)
+{
+	const char *pcGateName = (pFault->gate->hash && pFault->gate->hash->symbol) ? pFault->gate->hash->symbol : "";
+	snprintf(pcKey, iKeySize, "%s|%d|%d", pcGateName, pFault->line, pFault->type);
+}
+
+static int extract_json_string(const char *pcObject, const char *pcField, char *pcValue, int iValueSize)
+{
+	char pcPattern[64];
+	char *pcStart;
+	char *pcEnd;
+	snprintf(pcPattern, sizeof(pcPattern), "\"%s\":\"", pcField);
+	pcStart = strstr((char *)pcObject, pcPattern);
+	if (pcStart == NULL)
+	{
+		return(FALSE);
+	}
+	pcStart += strlen(pcPattern);
+	pcEnd = strchr(pcStart, '"');
+	if (pcEnd == NULL)
+	{
+		return(FALSE);
+	}
+	snprintf(pcValue, iValueSize, "%.*s", (int)(pcEnd - pcStart), pcStart);
+	return(TRUE);
+}
+
+static int extract_json_double(const char *pcObject, const char *pcField, double *plfValue)
+{
+	char pcPattern[64];
+	char *pcStart;
+	snprintf(pcPattern, sizeof(pcPattern), "\"%s\":", pcField);
+	pcStart = strstr((char *)pcObject, pcPattern);
+	if (pcStart == NULL)
+	{
+		return(FALSE);
+	}
+	pcStart += strlen(pcPattern);
+	*plfValue = atof(pcStart);
+	return(TRUE);
+}
+
+static int extract_json_int(const char *pcObject, const char *pcField, int *piValue)
+{
+	double lfValue;
+	if (!extract_json_double(pcObject, pcField, &lfValue))
+	{
+		return(FALSE);
+	}
+	*piValue = (int)lfValue;
+	return(TRUE);
+}
+
+static int compare_history_entry_key(const void *pLeft, const void *pRight)
+{
+	return(strcmp(((HISTORYENTRY *)pLeft)->key, ((HISTORYENTRY *)pRight)->key));
+}
+
+static HISTORYENTRY *find_history_entry(HISTORYENTRY *pEntries, int iNoEntries, const char *pcKey)
+{
+	HISTORYENTRY cNeedle;
+	snprintf(cNeedle.key, sizeof(cNeedle.key), "%s", pcKey);
+	cNeedle.score = 0.0;
+	cNeedle.budget = 0;
+	return((HISTORYENTRY *)bsearch(&cNeedle, pEntries, iNoEntries, sizeof(HISTORYENTRY), compare_history_entry_key));
+}
+
+static void reset_fault_history_profile(int iNoFault)
+{
+	int i;
+	for (i = 0; i < iNoFault; i++)
+	{
+		g_pFaultList[i]->history_score = 0.0;
+		g_pFaultList[i]->history_backtrack_budget = 0;
+	}
+}
+
+static void load_fault_history_profile(int iNoFault)
+{
+	FILE *fpProfile;
+	long iFileSize;
+	char *pcBuffer;
+	char *pcObject;
+	HISTORYENTRY *pEntries = NULL;
+	int iNoEntries = 0;
+	int iEntryCapacity = 0;
+	int iLoaded = 0;
+
+	reset_fault_history_profile(iNoFault);
+	if (g_strFaultProfileFileName[0] == '\0')
+	{
+		return;
+	}
+	if ((fpProfile = fopen(g_strFaultProfileFileName, "r")) == NULL)
+	{
+		fprintf(stderr, "Warning: fault profile %s could not be opened; history ordering uses fallback scores\n", g_strFaultProfileFileName);
+		return;
+	}
+	fseek(fpProfile, 0, SEEK_END);
+	iFileSize = ftell(fpProfile);
+	fseek(fpProfile, 0, SEEK_SET);
+	pcBuffer = (char *)malloc((unsigned)(iFileSize + 1));
+	if (pcBuffer == NULL)
+	{
+		fclose(fpProfile);
+		return;
+	}
+	fread(pcBuffer, 1, iFileSize, fpProfile);
+	pcBuffer[iFileSize] = '\0';
+	fclose(fpProfile);
+
+	pcObject = pcBuffer;
+	while ((pcObject = strstr(pcObject, "\"key\":\"")) != NULL)
+	{
+		char pcKey[MAXSTRING];
+		double lfScore = 0.0;
+		int iBudget = 0;
+		if (extract_json_string(pcObject, "key", pcKey, sizeof(pcKey)))
+		{
+			extract_json_double(pcObject, "score", &lfScore);
+			extract_json_int(pcObject, "backtrack_budget", &iBudget);
+			if (iNoEntries >= iEntryCapacity)
+			{
+				iEntryCapacity = (iEntryCapacity == 0) ? 1024 : iEntryCapacity * 2;
+				pEntries = (HISTORYENTRY *)realloc(pEntries, (unsigned)(sizeof(HISTORYENTRY) * iEntryCapacity));
+				if (pEntries == NULL)
+				{
+					break;
+				}
+			}
+			snprintf(pEntries[iNoEntries].key, sizeof(pEntries[iNoEntries].key), "%s", pcKey);
+			pEntries[iNoEntries].score = lfScore;
+			pEntries[iNoEntries].budget = iBudget;
+			iNoEntries++;
+		}
+		pcObject += 7;
+	}
+	if (pEntries != NULL)
+	{
+		int i;
+		qsort(pEntries, iNoEntries, sizeof(HISTORYENTRY), compare_history_entry_key);
+		for (i = 0; i < iNoFault; i++)
+		{
+			char pcFaultKey[MAXSTRING];
+			HISTORYENTRY *pEntry;
+			get_fault_key(g_pFaultList[i], pcFaultKey, sizeof(pcFaultKey));
+			pEntry = find_history_entry(pEntries, iNoEntries, pcFaultKey);
+			if (pEntry != NULL)
+			{
+				g_pFaultList[i]->history_score = pEntry->score;
+				g_pFaultList[i]->history_backtrack_budget = pEntry->budget;
+				iLoaded++;
+			}
+		}
+		free(pEntries);
+	}
+	free(pcBuffer);
+	fprintf(stdout, "Loaded history profile entries              : %d\n", iLoaded);
 }
 
 static long get_fault_priority(FAULTPTR pFault)
@@ -228,6 +396,11 @@ static long get_fault_priority(FAULTPTR pFault)
 	{
 		int iStemLike = (pGate->outCount > 1 || pSite->outCount > 1);
 		return((long)iStemLike * 100000000L + (long)(pGate->outCount + pSite->outCount) * 100000L - (long)pSite->dpo * 100L);
+	}
+	if (strcmp(g_strFaultOrderMode, "history") == 0)
+	{
+		int iStemLike = (pGate->outCount > 1 || pSite->outCount > 1);
+		return((long)(pFault->history_score * 1000.0) + (long)iStemLike * 100L);
 	}
 	return(0L);
 }
@@ -257,7 +430,12 @@ static void apply_fault_ordering(int iNoFault)
 	{
 		return;
 	}
-	if (strcmp(g_strFaultOrderMode, "easy") != 0 && strcmp(g_strFaultOrderMode, "stem") != 0)
+	if (strcmp(g_strFaultOrderMode, "history") == 0)
+	{
+		load_fault_history_profile(iNoFault);
+	}
+	if (strcmp(g_strFaultOrderMode, "easy") != 0 && strcmp(g_strFaultOrderMode, "stem") != 0 &&
+		strcmp(g_strFaultOrderMode, "history") != 0)
 	{
 		fprintf(stderr, "Warning: unknown fault ordering mode %s; using default order\n", g_strFaultOrderMode);
 		strcpy(g_strFaultOrderMode, "default");
@@ -417,7 +595,7 @@ int main(int argc, char *argv[]) //for windows
 		exit(0);
 	}
 	fprintf(g_fpFaultTraceFile,
-		"phase,selection_order,fault_index,fault_gate,fault_site,line,stuck_at,gate_dpi,gate_dpo,site_dpi,site_dpo,is_stem,is_fanout,fanout_count,fanin_count,site_fanout_count,site_fanin_count,gate_cont0,gate_cont1,site_cont0,site_cont1,result,fan_state,backtracks,fan_runtime,generated_pattern_index,pattern_detected_faults,pattern_extra_drops,compaction_origin_key\n");
+		"phase,selection_order,fault_index,fault_gate,fault_site,line,stuck_at,gate_dpi,gate_dpo,site_dpi,site_dpo,is_stem,is_fanout,fanout_count,fanin_count,site_fanout_count,site_fanin_count,gate_cont0,gate_cont1,site_cont0,site_cont1,result,fan_state,backtracks,backtrack_budget,fan_runtime,generated_pattern_index,pattern_detected_faults,pattern_extra_drops,compaction_origin_key\n");
 
 	strcpy(g_strPatternTraceFileName, g_strTestFileName);
 	strcat(g_strPatternTraceFileName, ".patterntrace.csv");
@@ -906,6 +1084,8 @@ int read_option(char option, char *array[], int i, int n)
 		learnmode = 'y'; break;
 	case 'f':
 		faultmode = 'f'; strcpy(g_strFaultFileName, array[++i]); break;
+	case 'F':
+		strcpy(g_strFaultProfileFileName, array[++i]); break;
 	case 'H':
 		_MODE_SIM = 'h'; break;
 	case '0':

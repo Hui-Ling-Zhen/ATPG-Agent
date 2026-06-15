@@ -44,6 +44,7 @@ CSV_FIELDS = (
     "backtrackings",
     "runtime_seconds",
     "fault_ordering_mode",
+    "fault_history_profile",
     "fault_trace_attempts",
     "generated_patterns_traced",
     "faults_dropped_per_generated_pattern_mean",
