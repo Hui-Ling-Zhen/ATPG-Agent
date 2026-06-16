@@ -591,6 +591,28 @@ The three most representative results are `adaptive_c1`, `stem_first`, and the l
 
 `history_ordering` is the strongest runtime/backtracking result so far. Against repeated default, the latest reuse-aware policy improves runtime by `9.231s` on average and reduces total backtrackings by `6649.000` on average, while preserving coverage on every benchmark. Compared with `stem_first`, it shows why history-aware learning is more than a static structural heuristic: it learns which faults, FFR groups, and pattern-drop relationships were historically valuable or expensive, then changes both ordering and backtrack budget in the next run.
 
+### Reported vs Effective Coverage
+
+Atalanta's reported fault coverage counts only detected faults. For ATPG analysis, redundant faults can also be treated as explained faults because they are proven untestable rather than missed by the generated tests. Therefore, this README also uses an effective coverage view when interpreting low-coverage benchmarks:
+
+```text
+effective_coverage = (detected + redundant) / collapsed_faults
+                   = 1 - aborted / collapsed_faults
+```
+
+This distinction is important for `DMAtc`. Its reported coverage remains around `94.562%`, but a large part of the remaining faults are redundant rather than truly unresolved.
+
+| Metric | Default | Reuse-aware `history_ordering` | Interpretation |
+|---|---:|---:|---|
+| Reported coverage | 94.562 | 94.562 | Detected-only Atalanta metric. |
+| Effective coverage | 97.225 | 97.118 | Counts detected + redundant as explained. |
+| Aborted faults | 2159 | 2242 | Truly unresolved faults under this interpretation. |
+| Redundant faults | 2071 | 1988 | Proven untestable / explained faults. |
+| Backtrackings | 24460 | 4596 | Reuse-aware history sharply reduces FAN search. |
+| Runtime (s) | 37.411 | 24.039 | Runtime is reduced while reported coverage is preserved. |
+
+Increasing the backtrack limit on `DMAtc` mostly converts aborted faults into redundant faults rather than detected faults. For example, `-b 50` keeps reported coverage at `94.562%`, while reducing aborted faults from `2159` to `983` and increasing redundant faults from `2071` to `3247`, at the cost of much higher backtracking and runtime. This means the main optimization target for `DMAtc` should be runtime/backtracking and the aborted/redundant explanation balance, not simply chasing higher detected-only coverage.
+
 ### Reuse-Aware History Improvement
 
 The table below isolates the effect of the latest pattern-reuse-aware policy against the previous history-aware policy, using the repeated default baseline.
