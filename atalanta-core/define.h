@@ -200,6 +200,8 @@ typedef struct FAULT
 	double history_representative_score; /* target-fault value within its group */
 	int history_backtrack_budget; /* per-fault FAN backtrack budget from profile */
 	int history_group_budget; /* group-level FAN backtrack budget from profile */
+	int history_phase2_budget; /* adaptive per-fault phase-2 FAN budget */
+	int history_phase2_eligible; /* whether this fault should enter phase-2 */
 	int history_group_id; /* stem/FFR group identifier used by history profiles */
 	int history_group_size; /* number of collapsed faults in the group */
 	level observe;		/* detectability */

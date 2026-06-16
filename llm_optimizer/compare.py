@@ -45,6 +45,10 @@ CSV_FIELDS = (
     "candidate_score",
     "baseline_score",
     "fault_ordering_mode",
+    "adaptive_phase2_enabled",
+    "adaptive_phase2_profile_faults",
+    "adaptive_phase2_attempted_faults",
+    "adaptive_phase2_skipped_faults",
     "faults_dropped_per_generated_pattern_mean",
     "extra_drops_per_generated_pattern_mean",
     "max_pattern_extra_drops",
@@ -87,6 +91,10 @@ STATS_FIELDS = (
     "faults_dropped_per_generated_pattern_mean",
     "extra_drops_per_generated_pattern_mean",
     "max_pattern_extra_drops_mean",
+    "adaptive_phase2_enabled_rate",
+    "adaptive_phase2_profile_faults_mean",
+    "adaptive_phase2_attempted_faults_mean",
+    "adaptive_phase2_skipped_faults_mean",
     "adaptive_enabled_rate",
     "adaptive_shuffle_limit_mean",
     "adaptive_stopped_early_rate",
@@ -116,6 +124,10 @@ SUMMARY_FIELDS = (
     "faults_dropped_per_generated_pattern_mean",
     "extra_drops_per_generated_pattern_mean",
     "max_pattern_extra_drops_mean",
+    "adaptive_phase2_enabled_rate_mean",
+    "adaptive_phase2_profile_faults_mean",
+    "adaptive_phase2_attempted_faults_mean",
+    "adaptive_phase2_skipped_faults_mean",
     "adaptive_enabled_rate_mean",
     "adaptive_shuffle_limit_mean",
     "adaptive_stopped_early_rate_mean",
@@ -272,6 +284,10 @@ def compare_rows(
                 "candidate_score": cand_score,
                 "baseline_score": base_score,
                 "fault_ordering_mode": row.get("fault_ordering_mode", ""),
+                "adaptive_phase2_enabled": row.get("adaptive_phase2_enabled", ""),
+                "adaptive_phase2_profile_faults": row.get("adaptive_phase2_profile_faults", ""),
+                "adaptive_phase2_attempted_faults": row.get("adaptive_phase2_attempted_faults", ""),
+                "adaptive_phase2_skipped_faults": row.get("adaptive_phase2_skipped_faults", ""),
                 "faults_dropped_per_generated_pattern_mean": row.get(
                     "faults_dropped_per_generated_pattern_mean",
                     "",
@@ -357,6 +373,18 @@ def aggregate_repeated_trials(comparisons: list[dict[str, Any]]) -> list[dict[st
         redundant_delta_values = _field_values(successful, "redundant_delta")
         backtracking_delta_values = _field_values(successful, "backtracking_delta")
         score_values = _field_values(successful, "candidate_score")
+        adaptive_phase2_profile_faults_values = _field_values(
+            successful,
+            "adaptive_phase2_profile_faults",
+        )
+        adaptive_phase2_attempted_values = _field_values(
+            successful,
+            "adaptive_phase2_attempted_faults",
+        )
+        adaptive_phase2_skipped_values = _field_values(
+            successful,
+            "adaptive_phase2_skipped_faults",
+        )
         adaptive_limit_values = _field_values(successful, "adaptive_shuffle_limit")
         adaptive_min_benefit_values = _field_values(
             successful,
@@ -459,6 +487,13 @@ def aggregate_repeated_trials(comparisons: list[dict[str, Any]]) -> list[dict[st
                 "faults_dropped_per_generated_pattern_mean": _mean(faults_dropped_values),
                 "extra_drops_per_generated_pattern_mean": _mean(extra_drops_values),
                 "max_pattern_extra_drops_mean": _mean(max_extra_drops_values),
+                "adaptive_phase2_enabled_rate": _bool_rate(
+                    successful,
+                    "adaptive_phase2_enabled",
+                ),
+                "adaptive_phase2_profile_faults_mean": _mean(adaptive_phase2_profile_faults_values),
+                "adaptive_phase2_attempted_faults_mean": _mean(adaptive_phase2_attempted_values),
+                "adaptive_phase2_skipped_faults_mean": _mean(adaptive_phase2_skipped_values),
                 "adaptive_enabled_rate": _bool_rate(
                     successful,
                     "adaptive_compaction_enabled",
@@ -534,6 +569,18 @@ def summarize_stats(stats: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 ),
                 "max_pattern_extra_drops_mean": _mean(
                     [float(row["max_pattern_extra_drops_mean"]) for row in rows if row.get("max_pattern_extra_drops_mean") is not None]
+                ),
+                "adaptive_phase2_enabled_rate_mean": _mean(
+                    [float(row["adaptive_phase2_enabled_rate"]) for row in rows if row.get("adaptive_phase2_enabled_rate") is not None]
+                ),
+                "adaptive_phase2_profile_faults_mean": _mean(
+                    [float(row["adaptive_phase2_profile_faults_mean"]) for row in rows if row.get("adaptive_phase2_profile_faults_mean") is not None]
+                ),
+                "adaptive_phase2_attempted_faults_mean": _mean(
+                    [float(row["adaptive_phase2_attempted_faults_mean"]) for row in rows if row.get("adaptive_phase2_attempted_faults_mean") is not None]
+                ),
+                "adaptive_phase2_skipped_faults_mean": _mean(
+                    [float(row["adaptive_phase2_skipped_faults_mean"]) for row in rows if row.get("adaptive_phase2_skipped_faults_mean") is not None]
                 ),
                 "adaptive_enabled_rate_mean": _mean(
                     [float(row["adaptive_enabled_rate"]) for row in rows if row.get("adaptive_enabled_rate") is not None]

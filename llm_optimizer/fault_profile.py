@@ -42,6 +42,8 @@ class FaultStats:
         group_budget: int,
         wait_score: float,
         representative_fault_score: float,
+        phase2_base_budget: int,
+        phase2_max_budget: int,
     ) -> dict[str, Any]:
         generated = max(self.generated_patterns, 1)
         attempts = max(self.attempts, 1)
@@ -74,6 +76,30 @@ class FaultStats:
         else:
             budget = min(base_backtrack_budget, group_budget)
 
+        hard_fault = abort_rate > 0.0 or avg_backtracks >= base_backtrack_budget * 0.8
+        useful_fault = (
+            avg_extra_drops >= 10
+            or representative_fault_score > 0
+            or (group_score > wait_score and group_score > 0)
+            or stem_bonus > 0
+        )
+        low_value_waiting_fault = wait_score > group_score and avg_extra_drops < 5
+        if not hard_fault:
+            phase2_budget = 0
+        elif low_value_waiting_fault:
+            phase2_budget = 0
+        elif abort_rate > 0.5 and not useful_fault:
+            phase2_budget = 1
+        elif stem_bonus > 0 and (avg_extra_drops >= 10 or group_score > wait_score):
+            phase2_budget = phase2_max_budget
+        elif avg_extra_drops >= 100 or group_score >= 100:
+            phase2_budget = phase2_max_budget
+        elif useful_fault:
+            phase2_budget = min(phase2_max_budget, max(phase2_base_budget, group_budget))
+        else:
+            phase2_budget = 0
+        phase2_eligible = int(phase2_budget > 1)
+
         return {
             "key": self.key,
             "fault_gate": self.fault_gate,
@@ -96,6 +122,8 @@ class FaultStats:
             "representative_fault_score": representative_fault_score,
             "score": score,
             "backtrack_budget": budget,
+            "phase2_eligible": phase2_eligible,
+            "phase2_budget": phase2_budget,
         }
 
 
@@ -253,6 +281,8 @@ def build_fault_profile(
     group_eta: float,
     group_wait_penalty: float,
     base_backtrack_budget: int,
+    phase2_base_budget: int,
+    phase2_max_budget: int,
 ) -> Path:
     retained = _retained_origins(pattern_trace)
     stats: dict[str, FaultStats] = {}
@@ -345,6 +375,8 @@ def build_fault_profile(
             group_budget=group_budget_by_id.get(item.group_id, base_backtrack_budget),
             wait_score=wait_score_by_id.get(item.group_id, 0.0),
             representative_fault_score=representative_by_fault.get(item.key, 0.0),
+            phase2_base_budget=phase2_base_budget,
+            phase2_max_budget=phase2_max_budget,
         )
         for item in stats.values()
     ]
@@ -361,6 +393,8 @@ def build_fault_profile(
         "source_drop_trace": str(drop_trace) if drop_trace else None,
         "weights": weights,
         "base_backtrack_budget": base_backtrack_budget,
+        "phase2_base_budget": phase2_base_budget,
+        "phase2_max_budget": phase2_max_budget,
         "groups": group_rows,
         "faults": rows,
     }
@@ -397,6 +431,18 @@ def main() -> int:
     parser.add_argument("--group-eta", type=float, default=10.0)
     parser.add_argument("--group-wait-penalty", type=float, default=1.0)
     parser.add_argument("--base-backtrack-budget", type=int, default=10)
+    parser.add_argument(
+        "--phase2-base-budget",
+        type=int,
+        default=10,
+        help="Adaptive phase-2 budget for hard useful faults.",
+    )
+    parser.add_argument(
+        "--phase2-max-budget",
+        type=int,
+        default=20,
+        help="Maximum adaptive phase-2 budget for high-value faults.",
+    )
     args = parser.parse_args()
 
     output = args.output or (
@@ -421,6 +467,8 @@ def main() -> int:
         group_eta=args.group_eta,
         group_wait_penalty=args.group_wait_penalty,
         base_backtrack_budget=args.base_backtrack_budget,
+        phase2_base_budget=args.phase2_base_budget,
+        phase2_max_budget=args.phase2_max_budget,
     )
     print(f"Wrote fault profile to {path}")
     return 0

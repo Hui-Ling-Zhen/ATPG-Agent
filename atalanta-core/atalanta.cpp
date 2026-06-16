@@ -185,6 +185,10 @@ int iseed = 0;			/* initial random seed */
 int g_iRPTStopLimit = 16;		/* condition for RPT stopping */
 int g_iMaxBackTrack1 = 10;		/* maximum backtracking of FAN */
 int g_iMaxBackTrack2 = 0;		/* maximum backtracking of FAN */
+int g_iAdaptivePhase2Enabled = 1;
+int g_iAdaptivePhase2ProfileFaults = 0;
+int g_iAdaptivePhase2Attempted = 0;
+int g_iAdaptivePhase2Skipped = 0;
 int g_iMaxCompact = 2;		/* maximum limit for compaction*/
 char g_cAdaptiveCompact = 'y';		/* y: adaptive shuffle stop enabled */
 int g_iAdaptiveCompactEffectiveLimit = 0;
@@ -214,6 +218,8 @@ typedef struct history_entry
 	double representative_score;
 	int budget;
 	int group_budget;
+	int phase2_budget;
+	int phase2_eligible;
 	int group_size;
 } HISTORYENTRY;
 
@@ -266,6 +272,14 @@ static void initialize_fault_group_features(int iNoFault)
 			iGroupId = get_fault_site(g_pFaultList[i])->index;
 		}
 		g_pFaultList[i]->history_group_id = iGroupId;
+		g_pFaultList[i]->history_score = 0.0;
+		g_pFaultList[i]->history_group_score = 0.0;
+		g_pFaultList[i]->history_wait_score = 0.0;
+		g_pFaultList[i]->history_representative_score = 0.0;
+		g_pFaultList[i]->history_backtrack_budget = 0;
+		g_pFaultList[i]->history_group_budget = 0;
+		g_pFaultList[i]->history_phase2_budget = 0;
+		g_pFaultList[i]->history_phase2_eligible = 0;
 		piGroupSizes[iGroupId]++;
 	}
 	for (i = 0; i < iNoFault; i++)
@@ -338,6 +352,8 @@ static HISTORYENTRY *find_history_entry(HISTORYENTRY *pEntries, int iNoEntries, 
 	cNeedle.representative_score = 0.0;
 	cNeedle.budget = 0;
 	cNeedle.group_budget = 0;
+	cNeedle.phase2_budget = 0;
+	cNeedle.phase2_eligible = 0;
 	cNeedle.group_size = 0;
 	return((HISTORYENTRY *)bsearch(&cNeedle, pEntries, iNoEntries, sizeof(HISTORYENTRY), compare_history_entry_key));
 }
@@ -353,7 +369,12 @@ static void reset_fault_history_profile(int iNoFault)
 		g_pFaultList[i]->history_representative_score = 0.0;
 		g_pFaultList[i]->history_backtrack_budget = 0;
 		g_pFaultList[i]->history_group_budget = 0;
+		g_pFaultList[i]->history_phase2_budget = 0;
+		g_pFaultList[i]->history_phase2_eligible = 0;
 	}
+	g_iAdaptivePhase2ProfileFaults = 0;
+	g_iAdaptivePhase2Attempted = 0;
+	g_iAdaptivePhase2Skipped = 0;
 }
 
 static void load_fault_history_profile(int iNoFault)
@@ -400,6 +421,8 @@ static void load_fault_history_profile(int iNoFault)
 		double lfRepresentativeScore = 0.0;
 		int iBudget = 0;
 		int iGroupBudget = 0;
+		int iPhase2Budget = 0;
+		int iPhase2Eligible = 0;
 		int iGroupSize = 0;
 		if (extract_json_string(pcObject, "key", pcKey, sizeof(pcKey)))
 		{
@@ -409,6 +432,8 @@ static void load_fault_history_profile(int iNoFault)
 			extract_json_double(pcObject, "representative_fault_score", &lfRepresentativeScore);
 			extract_json_int(pcObject, "backtrack_budget", &iBudget);
 			extract_json_int(pcObject, "group_budget", &iGroupBudget);
+			extract_json_int(pcObject, "phase2_budget", &iPhase2Budget);
+			extract_json_int(pcObject, "phase2_eligible", &iPhase2Eligible);
 			extract_json_int(pcObject, "group_size", &iGroupSize);
 			if (iNoEntries >= iEntryCapacity)
 			{
@@ -426,6 +451,8 @@ static void load_fault_history_profile(int iNoFault)
 			pEntries[iNoEntries].representative_score = lfRepresentativeScore;
 			pEntries[iNoEntries].budget = iBudget;
 			pEntries[iNoEntries].group_budget = iGroupBudget;
+			pEntries[iNoEntries].phase2_budget = iPhase2Budget;
+			pEntries[iNoEntries].phase2_eligible = iPhase2Eligible;
 			pEntries[iNoEntries].group_size = iGroupSize;
 			iNoEntries++;
 		}
@@ -449,6 +476,12 @@ static void load_fault_history_profile(int iNoFault)
 				g_pFaultList[i]->history_representative_score = pEntry->representative_score;
 				g_pFaultList[i]->history_backtrack_budget = pEntry->budget;
 				g_pFaultList[i]->history_group_budget = pEntry->group_budget;
+				g_pFaultList[i]->history_phase2_budget = pEntry->phase2_budget;
+				g_pFaultList[i]->history_phase2_eligible = pEntry->phase2_eligible;
+				if (pEntry->phase2_eligible > 0 && pEntry->phase2_budget > 0)
+				{
+					g_iAdaptivePhase2ProfileFaults++;
+				}
 				if (pEntry->group_size > 0)
 				{
 					g_pFaultList[i]->history_group_size = pEntry->group_size;
@@ -991,8 +1024,10 @@ int main(int argc, char *argv[]) //for windows
 	 ******************************************************************/
 
 	iState = NO_TEST; //NO USE !!
-	//g_iMaxBackTrack2 == 0 by default!!!
-	if (g_iMaxBackTrack2 > 0 && g_iNoFault - iNoDetected - iNoRedundant > 0)
+	//g_iMaxBackTrack2 == 0 by default; history profiles can enable adaptive phase-2 budgets.
+	if ((g_iMaxBackTrack2 > 0 ||
+		(strcmp(g_strFaultOrderMode, "history") == 0 && g_iAdaptivePhase2Enabled && g_iAdaptivePhase2ProfileFaults > 0)) &&
+		g_iNoFault - iNoDetected - iNoRedundant > 0)
 	{
 		set(bPhase2);
 		for (i = 0; i < g_iNoFault; i++)
@@ -1005,7 +1040,8 @@ int main(int argc, char *argv[]) //for windows
 		}
 		lfFanTimeRemaining = 0;
 		//bPhase2 == 1
-		iNoDetected += testgen(g_iNoGate, g_iNoPI, g_iNoPO, iMaxLevelAdd2, iMaxBitSize, iNoStemGates, pStemGates, g_iMaxBackTrack2,
+		iNoDetected += testgen(g_iNoGate, g_iNoPI, g_iNoPO, iMaxLevelAdd2, iMaxBitSize, iNoStemGates, pStemGates,
+			(g_iMaxBackTrack2 > 0) ? g_iMaxBackTrack2 : 20,
 			bPhase2, &iNoRedundant, &iNoOverBackTrack, &iNoBackTrack, &iNoTempPatterns, &iPacket, &iBit, &lfFanTimeRemaining,
 			g_fpTestFile);
 		lfFanTime += lfFanTimeRemaining;
@@ -1064,7 +1100,8 @@ int main(int argc, char *argv[]) //for windows
 
 	/* print out the results */
 	print_atpg_head(stdout);
-	print_atpg_result(stdout, g_strCctFileName, g_iNoGate, g_iNoPI, g_iNoPO, iMaxLevelAdd2, g_iMaxBackTrack1, g_iMaxBackTrack2,
+	print_atpg_result(stdout, g_strCctFileName, g_iNoGate, g_iNoPI, g_iNoPO, iMaxLevelAdd2, g_iMaxBackTrack1,
+		(g_iMaxBackTrack2 > 0) ? g_iMaxBackTrack2 : 20,
 		bPhase2, iNoPatterns, iNoPatternsAfterCompact, g_iNoFault, iNoDetected, iNoRedundant, iNoBackTrack, iNoShuffle, lfInitTime,
 		lfSimTime1 + lfSimTime2 + lfSimTime3, lfFanTime, lfTime - lfStartTime, 'n', lfMemSize);
 	//				= lfSimTime				= lfFanTime		 = lfRunTime
@@ -1074,7 +1111,8 @@ int main(int argc, char *argv[]) //for windows
 	{
 		fprintf(g_fpLogFile, "\nEnd of test pattern generation.\n\n");
 		print_atpg_head(g_fpLogFile);
-		print_atpg_result(g_fpLogFile, g_strCctFileName, g_iNoGate, g_iNoPI, g_iNoPO, iMaxLevelAdd2, g_iMaxBackTrack1, g_iMaxBackTrack2, bPhase2,
+		print_atpg_result(g_fpLogFile, g_strCctFileName, g_iNoGate, g_iNoPI, g_iNoPO, iMaxLevelAdd2, g_iMaxBackTrack1,
+			(g_iMaxBackTrack2 > 0) ? g_iMaxBackTrack2 : 20, bPhase2,
 			iNoPatterns, (int)(iNoPatternsAfterCompact / 9.4443), g_iNoFault, iNoDetected, iNoRedundant, iNoBackTrack, iNoShuffle, lfInitTime,
 			lfSimTime1 + lfSimTime2 + lfSimTime3, lfFanTime, lfTime - lfStartTime, 'y', lfMemSize);
 	}

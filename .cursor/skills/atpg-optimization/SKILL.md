@@ -22,6 +22,7 @@ Use this skill when working in ATPG-Agent to improve ATPG runtime, fault coverag
 - Offline fault-to-fault history profiles are now group-aware. `llm_optimizer/fault_profile.py` reads `faulttrace.csv` / `patterntrace.csv`, generates `results/profiles/<benchmark>_fault_profile.json`, and includes both per-fault rows and FFR-style group rows keyed by `fault_group_id`.
 - `-O history` uses a high-reuse frontier: group score first, representative fault score second, fault score third, and wait score as a penalty. It then uses profile-suggested per-fault/per-group backtrack budgets to override the global `g_iMaxBackTrack1` on selected faults.
 - `droptrace.csv` records `target_fault/group -> dropped_fault/group` relationships from FSIM without changing fault dropping behavior. The profile builder uses this to learn group pair reuse, dropped-group distributions, and wait scores for groups likely to be dropped by someone else's pattern.
+- Adaptive phase-2 FAN budgeting is now profile-driven. `fault_profile.py` emits `phase2_eligible` and `phase2_budget`; `-O history -F <profile.json>` can start phase-2 without a fixed global `-B` and only calls `fan1()` for hard/high-value faults. Low-value or waitable faults are skipped in phase-2.
 
 ## Optimization Principles
 
@@ -63,6 +64,7 @@ The instrumentation writes:
    - reorder remaining faults using observed difficulty and pattern utility
    - prioritize faults likely to be detected by recently effective patterns
    - adapt backtrack budget by fault difficulty instead of using one global value
+   - adapt phase-2 budget by history, group reuse value, fanout/stem context, and controllability/observability-derived difficulty
    - reuse learned implication hints only when they are local and explainable
    - feed high-utility pattern information into compaction scoring
 
@@ -70,6 +72,7 @@ The instrumentation writes:
    - Generate `results/profiles/<benchmark>_fault_profile.json` from completed traces.
    - Use `-O history -F <profile.json>` for the next run.
    - Let the LLM/agent tune `alpha`, `beta`, `gamma`, `delta`, `epsilon`, `zeta`, and the `group_*` weights in the profile builder, not execute arbitrary commands.
+   - Let the profile decide `phase2_eligible` / `phase2_budget`; avoid broad global `-B` sweeps except as references.
    - Keep `stem_first` and `adaptive_c1` as references.
 
 5. Validate with repeated trials against the unchanged baseline and current best candidate.
@@ -91,6 +94,14 @@ score =
 ```
 
 Group score is learned from `fault_group_id`, group size, group-level extra drops, group-level backtracks, group abort rate, group compaction-retained rate, and group reuse probability. Treat this as the main path for improving pattern reuse without directly rewriting FSIM.
+
+Adaptive phase-2 guidance:
+
+- Simple detected faults should have `phase2_budget = 0`.
+- Historically aborted but low-value faults should be skipped or given budget `1`.
+- Hard/high-value stem or FFR representative faults may receive `phase2_base_budget` or `phase2_max_budget`.
+- Groups with high `wait_score` should be deprioritized for active phase-2 FAN search.
+- Report `adaptive_phase2_profile_faults`, `adaptive_phase2_attempted_faults`, and `adaptive_phase2_skipped_faults` with runtime/backtracking deltas.
 
 Use `droptrace.csv` when building profiles whenever available. It enables:
 
@@ -148,6 +159,7 @@ Build a history profile from a completed run:
 python3 -m llm_optimizer.fault_profile \
   --fault-trace results/runs/<run_id>/<benchmark>.test.faulttrace.csv \
   --pattern-trace results/runs/<run_id>/<benchmark>.test.patterntrace.csv \
+  --drop-trace results/runs/<run_id>/<benchmark>.test.droptrace.csv \
   --benchmark pcitc \
   --output results/profiles/pcitc_fault_profile.json
 ```
@@ -162,6 +174,18 @@ python3 llm_optimizer/experiments/run_candidates.py \
   --timeout-seconds 75 \
   --profile-dir results/profiles \
   --output results/candidates/fault_to_fault_learning_results.csv
+```
+
+Run adaptive phase-2 candidates:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set adaptive_phase2 \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --profile-dir results/profiles \
+  --output results/candidates/adaptive_phase2_results.csv
 ```
 
 Compare against repeated default:

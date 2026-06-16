@@ -80,6 +80,22 @@ def parse_atalanta_output(text: str) -> dict[str, Any]:
             )
             else None
         ),
+        "adaptive_phase2_enabled": _search_bool(
+            r"Adaptive phase-2 generation\s*:\s*(ON|OFF|YES|NO|TRUE|FALSE|1|0)",
+            text,
+        ),
+        "adaptive_phase2_profile_faults": _search_int(
+            r"Adaptive phase-2 profile faults\s*:\s*" + _INT,
+            text,
+        ),
+        "adaptive_phase2_attempted_faults": _search_int(
+            r"Adaptive phase-2 attempted faults\s*:\s*" + _INT,
+            text,
+        ),
+        "adaptive_phase2_skipped_faults": _search_int(
+            r"Adaptive phase-2 skipped faults\s*:\s*" + _INT,
+            text,
+        ),
         "adaptive_compaction_enabled": _search_bool(
             r"Adaptive shuffling compaction\s*:\s*(ON|OFF|YES|NO|TRUE|FALSE|1|0)",
             text,

@@ -470,6 +470,7 @@ The profile builder reads `faulttrace.csv` and `patterntrace.csv`, aggregates bo
 python3 -m llm_optimizer.fault_profile \
   --fault-trace results/runs/<run_id>/<benchmark>.test.faulttrace.csv \
   --pattern-trace results/runs/<run_id>/<benchmark>.test.patterntrace.csv \
+  --drop-trace results/runs/<run_id>/<benchmark>.test.droptrace.csv \
   --benchmark pcitc \
   --output results/profiles/pcitc_fault_profile.json
 ```
@@ -489,6 +490,7 @@ Each profile row includes:
 - group-level wait score, measuring whether a group is often dropped by other groups' patterns
 - group-level history score
 - group-level budget and representative fault score
+- adaptive phase-2 eligibility and budget
 - stem/fanout bonus
 - final history score
 - suggested per-fault backtrack budget
@@ -539,7 +541,59 @@ Internally, `-O history` sorts faults by a high-reuse frontier: group score firs
 - historically aborted and low-value faults receive a very small budget
 - ordinary faults keep the default budget
 
+The same profile now also controls adaptive phase-2 FAN search. Instead of treating `-B` as a single global second-pass limit, `fault_profile.py` emits `phase2_eligible` and `phase2_budget` for each fault:
+
+- easy faults and low-value duplicate faults do not enter phase-2
+- groups that are often dropped by other patterns receive a skip-like phase-2 decision
+- historically aborted but low-value faults receive budget `1` or are skipped
+- historically hard and useful stem / FFR representatives can receive moderate or high phase-2 budgets
+- if `-O history -F <profile.json>` is used and the profile contains phase-2 candidates, Atalanta can run adaptive phase-2 even when global `-B` is not set
+
+This turns phase-2 from "try every remaining fault with the same `-B`" into "only spend dynamic unique path sensitization on faults whose previous behavior suggests the extra search may pay off." Atalanta now reports `Adaptive phase-2 profile faults`, `attempted faults`, and `skipped faults`; the Python parser and comparison scripts also carry these fields through CSV output.
+
 This is also the first simulation-aware reuse layer. The implementation does not rewrite FSIM's internal fault dropping logic; instead, FSIM writes `droptrace.csv` while preserving its original behavior. The offline profile then uses `faulttrace.csv`, `patterntrace.csv`, and `droptrace.csv` to learn which target faults and FFR groups tend to generate patterns that drop many other groups and survive compaction. In other words, simulation remains the signoff mechanism, while the next run's ordering is biased toward groups whose previous patterns had high reuse value and away from groups that are better left to be dropped by someone else's pattern.
+
+Adaptive phase-2 has a dedicated candidate set:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set adaptive_phase2 \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --profile-dir results/profiles \
+  --output results/candidates/adaptive_phase2_results.csv
+```
+
+Initial smoke on `pcitc.bench` used a freshly generated history profile and `-O history -F results/profiles/pcitc_adaptive_phase2_fault_profile.json`. Coverage stayed at `99.826%`; total backtrackings dropped from `134` in the seed default run to `51`; runtime was `10.133s`; the profile exposed `3` adaptive phase-2 candidate faults, while the final remaining faults in this run were handled by the skip-like path. This is not yet a repeated-trial result, but it verifies that the new control path works and that phase-2 budget can now be constrained per fault.
+
+The formal adaptive phase-2 3-trial experiment was run with:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set adaptive_phase2 \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --profile-dir results/profiles/adaptive_phase2 \
+  --output results/candidates/adaptive_phase2_results.csv
+```
+
+The comparison outputs are:
+
+- `results/comparisons/adaptive_phase2_vs_default/`
+- `results/comparisons/adaptive_phase2_vs_adaptive_c1/`
+
+All 36 adaptive phase-2 candidate runs succeeded, with no timeouts and no reported-coverage regressions.
+
+| Candidate | Baseline | Wins | Stable wins | Runtime wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean | Backtracking delta mean |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `history_adaptive_phase2` | repeated default | 3 | 3 | 3 | +0.552 | -8.072 | +25.556 | -2698.333 |
+| `history_adaptive_phase2_c1` | repeated default | 3 | 3 | 3 | +0.384 | -5.509 | +16.667 | -2698.333 |
+| `history_adaptive_phase2` | `adaptive_c1` | 2 | 2 | 3 | +0.329 | -5.630 | +23.444 | -2698.333 |
+| `history_adaptive_phase2_c1` | `adaptive_c1` | 2 | 2 | 3 | +0.161 | -3.067 | +14.556 | -2698.333 |
+
+This result is deliberately more conservative than the previous reuse-aware `history_ordering`. The previous policy reduced more backtracking (`-6649.000` mean versus `-2698.333` here), mainly because it skipped low-value hard faults more aggressively on `DMAtc`. Adaptive phase-2 spends extra `fan1()` budget on hard/high-value candidates, so the backtracking reduction is smaller, but the aborted-fault increase is also smaller on `DMAtc` (`+60` versus `+83` for reuse-aware `history_ordering`). In reported Atalanta coverage, both policies preserve coverage; in effective coverage terms, adaptive phase-2 is the more coverage-conservative variant because it leaves fewer faults unresolved while still cutting runtime and backtracking substantially.
 
 The original history-ordering 3-trial experiment was run with:
 

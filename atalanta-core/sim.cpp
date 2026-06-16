@@ -86,6 +86,8 @@ extern int g_iMaxCompact;
 extern char g_cAdaptiveCompact;
 extern int g_iAdaptiveCompactEffectiveLimit;
 extern int g_iAdaptiveCompactStoppedEarly;
+extern int g_iAdaptivePhase2Attempted;
+extern int g_iAdaptivePhase2Skipped;
 extern double g_lfAdaptiveCompactMinBenefit;
 extern FILE *g_fpLogFile;
 extern FILE *g_fpFaultTraceFile;
@@ -751,7 +753,25 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 		fprintf(stderr, "iLastUndetectedFault=%d\n", iLastUndetectedFault);
 		getTime(&lfMinutes, &lfSeconds, &lfRunTime1);
 		iFaultBacktrackBudget = iMaxBackTrack;
-		if (strcmp(g_strFaultOrderMode, "history") == 0 && pLastUndetectedFault->history_backtrack_budget > 0)
+		if (bPhase2 == TRUE && strcmp(g_strFaultOrderMode, "history") == 0)
+		{
+			if (pLastUndetectedFault->history_phase2_eligible <= 0 ||
+				pLastUndetectedFault->history_phase2_budget <= 0)
+			{
+				iNoBackTrack = 0;
+				iState = OVER_BACKTRACK;
+				(*piNoOverBackTrack)++;
+				pLastUndetectedFault->detected = PROCESSED;
+				g_iAdaptivePhase2Skipped++;
+				getTime(&lfMinutes, &lfSeconds, &lfRunTime2);
+				log_fault_trace(2, iSelectionOrder, iLastUndetectedFault, pLastUndetectedFault, iState,
+					iNoBackTrack, 0, lfRunTime2 - lfRunTime1, 0, 0);
+				continue;
+			}
+			iFaultBacktrackBudget = pLastUndetectedFault->history_phase2_budget;
+			g_iAdaptivePhase2Attempted++;
+		}
+		else if (strcmp(g_strFaultOrderMode, "history") == 0 && pLastUndetectedFault->history_backtrack_budget > 0)
 		{
 			iFaultBacktrackBudget = pLastUndetectedFault->history_backtrack_budget;
 		}

@@ -66,6 +66,10 @@ extern int g_iRPTStopLimit, iseed, g_iMaxCompact;
 extern char g_cAdaptiveCompact;
 extern int g_iAdaptiveCompactEffectiveLimit;
 extern int g_iAdaptiveCompactStoppedEarly;
+extern int g_iAdaptivePhase2Enabled;
+extern int g_iAdaptivePhase2ProfileFaults;
+extern int g_iAdaptivePhase2Attempted;
+extern int g_iAdaptivePhase2Skipped;
 extern double g_lfAdaptiveCompactMinBenefit;
 extern double lfMemSize;
 extern struct FAULT **g_pFaultList;
@@ -162,6 +166,10 @@ void print_atpg_result(FILE *fpFile, char *strCctFileName, int iNoGate, int iNoP
 	{
 		fprintf(fpFile, "   Fault history profile                     : %s\n", g_strFaultProfileFileName);
 	}
+	fprintf(fpFile, "   Adaptive phase-2 generation               : %s\n", g_iAdaptivePhase2Enabled ? "ON" : "OFF");
+	fprintf(fpFile, "   Adaptive phase-2 profile faults           : %d\n", g_iAdaptivePhase2ProfileFaults);
+	fprintf(fpFile, "   Adaptive phase-2 attempted faults         : %d\n", g_iAdaptivePhase2Attempted);
+	fprintf(fpFile, "   Adaptive phase-2 skipped faults           : %d\n", g_iAdaptivePhase2Skipped);
 	fprintf(fpFile, "   Test pattern compaction Mode              : ");
 	if (compact == 'n')
 	{

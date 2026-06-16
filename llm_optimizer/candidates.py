@@ -256,12 +256,41 @@ FAULT_TO_FAULT_LEARNING_CANDIDATES: tuple[CandidateConfig, ...] = (
 )
 
 
+ADAPTIVE_PHASE2_CANDIDATES: tuple[CandidateConfig, ...] = (
+    CandidateConfig(
+        name="history_adaptive_phase2",
+        options=("-O", "history"),
+        hypothesis="Use the history profile to select only hard/high-value faults for phase-2 FAN and assign per-fault phase-2 budgets.",
+        source="adaptive_phase2",
+    ),
+    CandidateConfig(
+        name="history_adaptive_phase2_c1",
+        options=("-c", "1", "-O", "history"),
+        hypothesis="Combine adaptive phase-2 FAN budgeting with the current runtime-first compaction setting.",
+        source="adaptive_phase2",
+    ),
+    CandidateConfig(
+        name="global_phase2_b10_reference",
+        options=("-B", "10"),
+        hypothesis="Reference global phase-2 budget to compare fixed -B against adaptive per-fault budgeting.",
+        source="adaptive_phase2",
+    ),
+    CandidateConfig(
+        name="global_phase2_b20_reference",
+        options=("-B", "20"),
+        hypothesis="Reference deeper global phase-2 budget for coverage/runtime tradeoff comparison.",
+        source="adaptive_phase2",
+    ),
+)
+
+
 CANDIDATE_SETS: dict[str, tuple[CandidateConfig, ...]] = {
     "default": DEFAULT_CANDIDATES,
     "adaptive_compaction": ADAPTIVE_COMPACTION_CANDIDATES,
     "compaction_runtime_local": COMPACTION_RUNTIME_LOCAL_CANDIDATES,
     "fault_ordering": FAULT_ORDERING_CANDIDATES,
     "fault_to_fault_learning": FAULT_TO_FAULT_LEARNING_CANDIDATES,
+    "adaptive_phase2": ADAPTIVE_PHASE2_CANDIDATES,
 }
 
 
