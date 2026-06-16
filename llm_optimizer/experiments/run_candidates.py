@@ -72,6 +72,7 @@ CSV_FIELDS = (
     "run_dir",
     "fault_trace_path",
     "pattern_trace_path",
+    "drop_trace_path",
 )
 
 

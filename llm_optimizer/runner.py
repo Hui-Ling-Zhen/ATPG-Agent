@@ -99,6 +99,7 @@ def run_atalanta(config: AtalantaRunConfig) -> dict[str, Any]:
     result_file = run_dir / "result.json"
     fault_trace_file = run_dir / f"{test_file.name}.faulttrace.csv"
     pattern_trace_file = run_dir / f"{test_file.name}.patterntrace.csv"
+    drop_trace_file = run_dir / f"{test_file.name}.droptrace.csv"
     copied_fault_profile_file: Path | None = None
 
     command = [str(binary), "-t", test_file.name]
@@ -173,6 +174,7 @@ def run_atalanta(config: AtalantaRunConfig) -> dict[str, Any]:
             "pattern_trace_path": str(pattern_trace_file)
             if pattern_trace_file.exists()
             else None,
+            "drop_trace_path": str(drop_trace_file) if drop_trace_file.exists() else None,
             "vec_path": str(run_dir / f"{benchmark.stem}.vec")
             if (run_dir / f"{benchmark.stem}.vec").exists()
             else None,

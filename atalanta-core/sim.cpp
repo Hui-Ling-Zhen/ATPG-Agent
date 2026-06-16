@@ -90,6 +90,7 @@ extern double g_lfAdaptiveCompactMinBenefit;
 extern FILE *g_fpLogFile;
 extern FILE *g_fpFaultTraceFile;
 extern FILE *g_fpPatternTraceFile;
+extern FILE *g_fpDropTraceFile;
 extern int *g_PrimaryIn, *g_PrimaryOut;
 extern FAULTPTR *g_pFaultList;
 extern STACKTYPE g_stack;
@@ -128,6 +129,10 @@ extern char g_strVecFileName[FILENAME_MAX];
 #define is_checkpoint(gate) (gate->type>=PI || gate->outCount>1)
 
 int g_iNoPatternsForOneTime;
+int g_iCurrentTargetPatternIndex = 0;
+int g_iCurrentTargetGroupId = -1;
+int g_iCurrentTargetGroupSize = 0;
+char g_strCurrentTargetFaultKey[MAXSTRING] = "";
 //int ntest_each_limit;
 extern char gen_all_pat, no_faultsim;
 
@@ -205,6 +210,31 @@ static const char *fault_result_to_string(int iState)
 	return("aborted");
 }
 
+static void get_trace_fault_key(FAULTPTR pFault, char *pcKey, int iKeySize)
+{
+	const char *pcGateName = (pFault->gate->hash && pFault->gate->hash->symbol) ? pFault->gate->hash->symbol : "";
+	snprintf(pcKey, iKeySize, "%s|%d|%d", pcGateName, pFault->line, pFault->type);
+}
+
+void log_drop_trace(FAULTPTR pDroppedFault)
+{
+	char pcDroppedKey[MAXSTRING];
+	if (g_fpDropTraceFile == NULL || g_iCurrentTargetPatternIndex <= 0 || pDroppedFault == NULL)
+	{
+		return;
+	}
+	get_trace_fault_key(pDroppedFault, pcDroppedKey, sizeof(pcDroppedKey));
+	fprintf(g_fpDropTraceFile, "%d,%s,%d,%d,%s,%d,%d,%d\n",
+		g_iCurrentTargetPatternIndex,
+		g_strCurrentTargetFaultKey,
+		g_iCurrentTargetGroupId,
+		g_iCurrentTargetGroupSize,
+		pcDroppedKey,
+		pDroppedFault->history_group_id,
+		pDroppedFault->history_group_size,
+		(pDroppedFault->history_group_id == g_iCurrentTargetGroupId));
+}
+
 static void log_fault_trace(int iPhase, int iSelectionOrder, int iFaultIndex, FAULTPTR pFault, int iState,
 	int iBacktracks, int iBacktrackBudget, double lfFanRuntime, int iGeneratedPatternIndex, int iDetectedByPattern)
 {
@@ -220,7 +250,7 @@ static void log_fault_trace(int iPhase, int iSelectionOrder, int iFaultIndex, FA
 	}
 
 	fprintf(g_fpFaultTraceFile,
-		"%d,%d,%d,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%d,%.6lf,%d,%d,%d,%d\n",
+		"%d,%d,%d,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%d,%.6lf,%d,%d,%d,%d\n",
 		iPhase,
 		iSelectionOrder,
 		iFaultIndex,
@@ -228,6 +258,8 @@ static void log_fault_trace(int iPhase, int iSelectionOrder, int iFaultIndex, FA
 		pcSiteName,
 		pFault->line,
 		pFault->type,
+		pFault->history_group_id,
+		pFault->history_group_size,
 		pGate->dpi,
 		pGate->dpo,
 		pSite->dpi,
@@ -723,6 +755,10 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 		{
 			iFaultBacktrackBudget = pLastUndetectedFault->history_backtrack_budget;
 		}
+		else if (strcmp(g_strFaultOrderMode, "history") == 0 && pLastUndetectedFault->history_group_budget > 0)
+		{
+			iFaultBacktrackBudget = pLastUndetectedFault->history_group_budget;
+		}
 
 
 		/* test pattern generation using fan */
@@ -823,7 +859,15 @@ int testgen(int iNoGate, int iNoPI, int iNoPO, int iMaxLevelAdd2, int iMaxBitSiz
 			/* fault simulation */
 			//iArrProfile[0] = return of tgen_sim, so weird !!
 			//piNoPatterns NO USE !!!
+			g_iCurrentTargetPatternIndex = iGeneratedPatternIndex;
+			g_iCurrentTargetGroupId = pLastUndetectedFault->history_group_id;
+			g_iCurrentTargetGroupSize = pLastUndetectedFault->history_group_size;
+			get_trace_fault_key(pLastUndetectedFault, g_strCurrentTargetFaultKey, sizeof(g_strCurrentTargetFaultKey));
 			iArrProfile[0] = tgen_sim(iNoGate, iMaxLevelAdd2, iNoPI, iNoPO, iStem, pStem, *piNoPatterns, iArrProfile);
+			g_iCurrentTargetPatternIndex = 0;
+			g_iCurrentTargetGroupId = -1;
+			g_iCurrentTargetGroupSize = 0;
+			g_strCurrentTargetFaultKey[0] = '\0';
 			iNoDetected += iArrProfile[0];
 			iDetectedByPattern = iArrProfile[0];
 

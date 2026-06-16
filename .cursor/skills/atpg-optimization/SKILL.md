@@ -19,8 +19,9 @@ Use this skill when working in ATPG-Agent to improve ATPG runtime, fault coverag
 - `adaptive_default` and `adaptive_c2` prove adaptive early-stop is meaningful as a runtime-first lever: both preserve coverage and reduce runtime on all three benchmarks, but increase pattern count too much.
 - Static learning (`-L`) has not been a clear runtime win in these experiments; treat it as an ablation, not a default improvement.
 - First fault-ordering experiments added `-O easy` and `-O stem`. `stem_first` is the strongest initial ordering signal: against repeated default it achieved `runtime_win_count = 3`, `stable_win_count = 3`, `average_score_delta_mean = +0.420`, `runtime_delta_mean = -6.237s`; against `adaptive_c1` it still achieved `wins = 3`, `stable_win_count = 2`, `average_score_delta_mean = +0.197`.
-- Offline fault-to-fault history profiles are now supported. `llm_optimizer/fault_profile.py` reads `faulttrace.csv` / `patterntrace.csv`, generates `results/profiles/<benchmark>_fault_profile.json`, and Atalanta can consume the profile through `-O history -F <profile.json>`.
-- `-O history` uses profile scores for fault ordering and profile-suggested per-fault backtrack budgets to override the global `g_iMaxBackTrack1` on selected faults. A pcitc smoke test loaded `pcitc_fault_profile.json` successfully and ran with `fault_ordering_mode = history`.
+- Offline fault-to-fault history profiles are now group-aware. `llm_optimizer/fault_profile.py` reads `faulttrace.csv` / `patterntrace.csv`, generates `results/profiles/<benchmark>_fault_profile.json`, and includes both per-fault rows and FFR-style group rows keyed by `fault_group_id`.
+- `-O history` uses a high-reuse frontier: group score first, representative fault score second, fault score third, and wait score as a penalty. It then uses profile-suggested per-fault/per-group backtrack budgets to override the global `g_iMaxBackTrack1` on selected faults.
+- `droptrace.csv` records `target_fault/group -> dropped_fault/group` relationships from FSIM without changing fault dropping behavior. The profile builder uses this to learn group pair reuse, dropped-group distributions, and wait scores for groups likely to be dropped by someone else's pattern.
 
 ## Optimization Principles
 
@@ -68,7 +69,7 @@ The instrumentation writes:
 4. Prefer offline profile policies before invasive C++ inference changes:
    - Generate `results/profiles/<benchmark>_fault_profile.json` from completed traces.
    - Use `-O history -F <profile.json>` for the next run.
-   - Let the LLM/agent tune `alpha`, `beta`, `gamma`, `delta`, and `epsilon` in the profile builder, not execute arbitrary commands.
+   - Let the LLM/agent tune `alpha`, `beta`, `gamma`, `delta`, `epsilon`, `zeta`, and the `group_*` weights in the profile builder, not execute arbitrary commands.
    - Keep `stem_first` and `adaptive_c1` as references.
 
 5. Validate with repeated trials against the unchanged baseline and current best candidate.
@@ -86,7 +87,18 @@ score =
   - gamma   * historical_backtracks
   - delta   * historical_abort_rate
   + epsilon * stem_bonus
+  + zeta    * group_score
 ```
+
+Group score is learned from `fault_group_id`, group size, group-level extra drops, group-level backtracks, group abort rate, group compaction-retained rate, and group reuse probability. Treat this as the main path for improving pattern reuse without directly rewriting FSIM.
+
+Use `droptrace.csv` when building profiles whenever available. It enables:
+
+- `target_fault -> dropped_group_distribution`
+- `target_group -> dropped_group_distribution`
+- group pair reuse counts
+- `wait_score` for groups often dropped by other groups' patterns
+- `group_budget` and `representative_fault_score`
 
 The built-in candidate set is `fault_to_fault_learning`; pass `--profile-dir results/profiles` so `run_candidates.py` can attach benchmark-specific profiles.
 

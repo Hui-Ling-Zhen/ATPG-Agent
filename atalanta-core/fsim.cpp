@@ -96,6 +96,7 @@ extern level BITMASK[];
 extern level g_truthTable1[MAXGTYPE][MAXLEVEL];
 extern level g_truthTable2[MAXGTYPE][MAXLEVEL][MAXLEVEL];
 extern FAULTPTR g_pHeadFault, g_pCurrentFault, g_pTailFault, * g_pFaultList;
+extern void log_drop_trace(FAULTPTR pDroppedFault);
 extern void printFatalError();
 extern int ntest;
 extern level g_TABLE[Z + 1][2];
@@ -705,6 +706,7 @@ int DropDetectedFaults()
 				pFault = g_FUTList[i];
 				pFault->detected = DETECTED;
 				g_iNoDetected++;
+				log_drop_trace(pFault);
 /////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////
@@ -976,6 +978,7 @@ GATEPTR CheckSingleEvent(FAULTPTR pFault, GATEPTR pGate, register int iGID)
 				{
 					pFault->detected = DETECTED;
 					g_iNoDetected++;
+					log_drop_trace(pFault);
 #ifdef DIAGNOSIS
 					pFault->diag_id = diag_id;
 #endif
@@ -1033,6 +1036,7 @@ GATEPTR CheckSingleEvent(FAULTPTR pFault, GATEPTR pGate, register int iGID)
 				case DETECTED:
 					pFault->detected = DETECTED;
 					g_iNoDetected++;
+					log_drop_trace(pFault);
 #ifdef DIAGNOSIS
 					pFault->diag_id = diag_id;
 #endif
@@ -1419,6 +1423,7 @@ int FaultSim_HOPE() //Simulation
 				case DETECTED:
 					pFault->detected = DETECTED;
 					g_iNoDetected++;
+					log_drop_trace(pFault);
 #ifdef DIAGNOSIS
 					pFault->diag_id = diag_id;
 #endif

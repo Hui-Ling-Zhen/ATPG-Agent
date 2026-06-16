@@ -464,7 +464,7 @@ The main result is that `stem_first` is a real ordering signal. It preserves cov
 
 The next fault-ordering step is now implemented as an offline history policy. This keeps the LLM/agent role clean: it can adjust the scoring weights, while execution and signoff still happen through deterministic scripts and Atalanta runs.
 
-The profile builder reads `faulttrace.csv` and `patterntrace.csv`, aggregates each fault's historical value/cost, and writes `results/profiles/<benchmark>_fault_profile.json`:
+The profile builder reads `faulttrace.csv` and `patterntrace.csv`, aggregates both per-fault and per-FFR/group historical value/cost, and writes `results/profiles/<benchmark>_fault_profile.json`:
 
 ```bash
 python3 -m llm_optimizer.fault_profile \
@@ -476,15 +476,24 @@ python3 -m llm_optimizer.fault_profile \
 
 Each profile row includes:
 
+- `stem_index` / FFR-style `fault_group_id`
+- group size, based on the number of collapsed faults mapped to that group
+- `target_fault -> dropped_group_distribution`
+- `target_group -> dropped_group_distribution`
+- `group_pair_reuse_count`, captured through `droptrace.csv`
 - average extra drops per generated pattern
 - average backtracks
 - abort and redundant rates
 - compaction retained rate
+- group-level reuse probability
+- group-level wait score, measuring whether a group is often dropped by other groups' patterns
+- group-level history score
+- group-level budget and representative fault score
 - stem/fanout bonus
 - final history score
 - suggested per-fault backtrack budget
 
-The score is:
+The fault score now combines fault-local value with group-level reuse value:
 
 ```text
 score =
@@ -493,6 +502,19 @@ score =
   - gamma   * historical_backtracks
   - delta   * historical_abort_rate
   + epsilon * stem_bonus
+  + zeta    * group_score
+```
+
+The group score is computed from the same traces, but aggregated by `fault_group_id`:
+
+```text
+group_score =
+  + group_alpha * group_avg_extra_drops
+  + group_beta  * group_compaction_retained_rate
+  + group_eta   * group_reuse_probability
+  - group_gamma * group_avg_backtracks
+  - group_delta * group_abort_rate
+  - group_wait_penalty * group_wait_score
 ```
 
 Atalanta can then use the profile with `-O history -F <profile.json>`. The new `-F` option passes the profile to the core. `run_candidates.py` can also attach benchmark-specific profiles automatically:
@@ -507,13 +529,19 @@ python3 llm_optimizer/experiments/run_candidates.py \
   --output results/candidates/fault_to_fault_learning_results.csv
 ```
 
-Internally, `-O history` sorts faults by the profile score and uses the profile's `backtrack_budget` field as a per-fault override for the global `g_iMaxBackTrack1` during phase-1 FAN search. This implements the first adaptive backtrack policy:
+Internally, `-O history` sorts faults by a high-reuse frontier: group score first, representative fault score second, fault score third, and wait score as a penalty. It then uses the profile's `backtrack_budget` field as a per-fault override for the global `g_iMaxBackTrack1` during phase-1 FAN search. This implements group-aware ordering, per-fault/per-group budget control, and adaptive backtrack policy:
 
 - high-value stem / extra-drop faults can receive a larger budget
+- high-value FFR groups are selected before low-value groups
+- faults in groups that historically produce reusable, retained patterns are prioritized
+- faults in groups that are often dropped by other patterns receive lower priority
+- group-local duplicate / low-value faults receive low budgets
 - historically aborted and low-value faults receive a very small budget
 - ordinary faults keep the default budget
 
-The formal 3-trial experiment was run with:
+This is also the first simulation-aware reuse layer. The implementation does not rewrite FSIM's internal fault dropping logic; instead, FSIM writes `droptrace.csv` while preserving its original behavior. The offline profile then uses `faulttrace.csv`, `patterntrace.csv`, and `droptrace.csv` to learn which target faults and FFR groups tend to generate patterns that drop many other groups and survive compaction. In other words, simulation remains the signoff mechanism, while the next run's ordering is biased toward groups whose previous patterns had high reuse value and away from groups that are better left to be dropped by someone else's pattern.
+
+The original history-ordering 3-trial experiment was run with:
 
 ```bash
 python3 llm_optimizer/experiments/run_candidates.py \
@@ -532,19 +560,49 @@ The comparison outputs are:
 
 All 36 candidate runs succeeded, with no timeouts and no coverage regressions.
 
+After adding `droptrace.csv`, wait-score penalties, representative-fault scoring, and group/fault two-level budgets, the reuse-aware 3-trial experiment was run with:
+
+```bash
+python3 llm_optimizer/experiments/run_candidates.py \
+  --candidate-set fault_to_fault_learning \
+  --benchmarks pcitc destc DMAtc \
+  --trials 3 \
+  --timeout-seconds 75 \
+  --profile-dir results/profiles \
+  --output results/candidates/reuse_history_3trial_results.csv
+```
+
+The reuse-aware comparison outputs are:
+
+- `results/comparisons/reuse_history_vs_default/`
+- `results/comparisons/reuse_history_vs_adaptive_c1/`
+
+All 36 reuse-aware candidate runs succeeded, with no timeouts and no coverage regressions.
+
 ### Representative Results At A Glance
 
-The three most representative results are `adaptive_c1`, `stem_first`, and `history_ordering`. They show the progression from compaction policy, to structural fault ordering, to history-aware fault-to-fault learning. The table below uses the same repeated default baseline for all three.
+The three most representative results are `adaptive_c1`, `stem_first`, and the latest reuse-aware `history_ordering`. They show the progression from compaction policy, to structural fault ordering, to history-aware fault-to-fault learning. The table below uses the same repeated default baseline for all three.
 
 | Result | Agent/LLM Capability Represented | Coverage regressions | Wins | Stable wins | Runtime wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean | Backtracking delta mean |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `adaptive_c1` | Finds a runtime bottleneck in test compaction and turns it into an adaptive compaction policy. | 0 | 3 | 2 | 3 | +0.223 | -2.442 | +2.111 | n/a |
 | `stem_first` | Converts ATPG structure knowledge into a static, testable fault-ordering heuristic. | 0 | 3 | 3 | 3 | +0.426 | -6.059 | +18.222 | +55.667 |
-| `history_ordering` | Reuses previous fault-solving traces as an offline profile for next-run ordering and per-fault backtrack budgets. | 0 | 3 | 3 | 3 | +0.689 | -9.615 | +27.222 | -5822.667 |
+| `history_ordering` | Reuses fault, group, and pattern-drop traces for next-run ordering and per-fault/per-group backtrack budgets. | 0 | 3 | 3 | 3 | +0.716 | -9.231 | +20.667 | -6649.000 |
 
-`history_ordering` is the strongest runtime/backtracking result so far. Against repeated default, it improves runtime by `9.615s` on average and reduces total backtrackings by `5822.667` on average, while preserving coverage on every benchmark. Compared with `stem_first`, it shows why history-aware learning is more than a static structural heuristic: it learns which faults were historically valuable or expensive and changes both ordering and backtrack budget in the next run.
+`history_ordering` is the strongest runtime/backtracking result so far. Against repeated default, the latest reuse-aware policy improves runtime by `9.231s` on average and reduces total backtrackings by `6649.000` on average, while preserving coverage on every benchmark. Compared with `stem_first`, it shows why history-aware learning is more than a static structural heuristic: it learns which faults, FFR groups, and pattern-drop relationships were historically valuable or expensive, then changes both ordering and backtrack budget in the next run.
 
-The trade-off is pattern count. `history_ordering` increases patterns more than `adaptive_c1`, while `history_ordering_c1` reduces that increase at the cost of some runtime gain. The next agent step should tune `alpha/beta/gamma/delta/epsilon` to keep most of the backtracking/runtime gain while reducing the pattern penalty.
+### Reuse-Aware History Improvement
+
+The table below isolates the effect of the latest pattern-reuse-aware policy against the previous history-aware policy, using the repeated default baseline.
+
+| Result | Coverage regressions | Wins | Stable wins | Runtime wins | Avg score delta | Runtime delta mean (s) | Pattern delta mean | Backtracking delta mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Previous `history_ordering` | 0 | 3 | 3 | 3 | +0.689 | -9.615 | +27.222 | -5822.667 |
+| Reuse-aware `history_ordering` | 0 | 3 | 3 | 3 | +0.716 | -9.231 | +20.667 | -6649.000 |
+| Previous `history_ordering_c1` | 0 | 3 | 3 | 3 | +0.520 | -6.557 | +13.556 | -5822.667 |
+| Reuse-aware `history_ordering_c1` | 0 | 3 | 3 | 3 | +0.608 | -6.750 | +6.667 | -6649.000 |
+
+The reuse-aware policy improves the central trade-off: it keeps the stable runtime wins, improves the score, reduces the pattern penalty, and further reduces backtracking. `history_ordering_c1` is especially useful when pattern count matters: the pattern delta drops from `+13.556` to `+6.667` while runtime also improves slightly. The next agent step should tune `group_wait_penalty`, `zeta`, and the `group_*` weights to keep the backtracking/runtime gain while pushing pattern growth closer to zero.
 
 ## Notes
 

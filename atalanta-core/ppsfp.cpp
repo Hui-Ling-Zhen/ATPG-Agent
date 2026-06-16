@@ -72,6 +72,7 @@ extern level g_iAllOne;
 extern level BITMASK[BITSIZE];
 extern status g_iUpdateFlag, g_iUpdateFlag2;
 extern int g_iMaxLevel;
+extern void log_drop_trace(FAULTPTR pDroppedFault);
 
 /* macros for parallel gate evaluation */
 /* one input gate */
@@ -704,6 +705,7 @@ int updateFaultObserveByPOGate(register GATEPTR pGate, status *piUpdateFlag, int
 		{
 			pFault->detected = DETECTED;
 			iNoDetected++;
+			log_drop_trace(pFault);
 			for (i = iBit - 1; i >= 0; i--) //Always only execute i = 0 condition
 			{
 				if ((iTempObserve & BITMASK[i]) != ALL0) //iTempObserve[0] == 1
@@ -1170,6 +1172,7 @@ int Fault0_Simulation(int iNoGate, int iMaxDPI, int iNoPI, int iNoPO, int iStem,
 					}
 					pFault->detected = DETECTED;
 					iNoDetected++;
+					log_drop_trace(pFault);
 					if (--(pFault->gate->nfault) == 0)
 					{
 						set(g_iUpdateFlag);
@@ -1311,6 +1314,7 @@ int Fault1_Simulation(int iNoGate, int iMaxDPI, int iNoPI, int iNoPO, int iStem,
 					}
 					pFault->detected = DETECTED;
 					iNoDetected++;
+					log_drop_trace(pFault);
 					if (--(pFault->gate->nfault) == 0)
 					{
 						set(g_iUpdateFlag);

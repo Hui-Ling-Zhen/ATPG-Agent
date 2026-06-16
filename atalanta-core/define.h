@@ -195,7 +195,13 @@ typedef struct FAULT
 	fault_type type;	/* fault type */
 	int detected;	/* detected or not */
 	double history_score; /* offline fault-to-fault ordering score */
+	double history_group_score; /* offline FFR/group-level reuse score */
+	double history_wait_score; /* likelihood that another pattern will drop this group */
+	double history_representative_score; /* target-fault value within its group */
 	int history_backtrack_budget; /* per-fault FAN backtrack budget from profile */
+	int history_group_budget; /* group-level FAN backtrack budget from profile */
+	int history_group_id; /* stem/FFR group identifier used by history profiles */
+	int history_group_size; /* number of collapsed faults in the group */
 	level observe;		/* detectability */
 	struct FAULT *next;	/* pointer to the next fault */
 	struct FAULT *previous;	/* pointer to the previous fault */

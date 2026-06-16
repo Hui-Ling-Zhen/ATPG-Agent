@@ -167,7 +167,7 @@ int g_iPatternOriginStore[MAXTEST / 10][BITSIZE];
 
 /* default parameters setting */
 char g_strCctPathFileName[FILENAME_MAX] = "", g_strTestFileName[FILENAME_MAX] = "", g_strLogFileName[FILENAME_MAX] = "", g_strVecFileName[FILENAME_MAX] = "";
-char g_strFaultTraceFileName[FILENAME_MAX] = "", g_strPatternTraceFileName[FILENAME_MAX] = "";
+char g_strFaultTraceFileName[FILENAME_MAX] = "", g_strPatternTraceFileName[FILENAME_MAX] = "", g_strDropTraceFileName[FILENAME_MAX] = "";
 char g_strFaultFileName[FILENAME_MAX] = "";
 char g_strFaultProfileFileName[FILENAME_MAX] = "";
 char g_strCctFileName[FILENAME_MAX] = "";
@@ -202,13 +202,19 @@ FILE *fpFaultFile;
 FILE *fpUndetFaultFile;
 FILE *g_fpFaultTraceFile;
 FILE *g_fpPatternTraceFile;
+FILE *g_fpDropTraceFile;
 double lfMemSize;
 
 typedef struct history_entry
 {
 	char key[MAXSTRING];
 	double score;
+	double group_score;
+	double wait_score;
+	double representative_score;
 	int budget;
+	int group_budget;
+	int group_size;
 } HISTORYENTRY;
 
 static GATEPTR get_fault_site(FAULTPTR pFault)
@@ -226,6 +232,48 @@ static void get_fault_key(FAULTPTR pFault, char *pcKey, int iKeySize)
 {
 	const char *pcGateName = (pFault->gate->hash && pFault->gate->hash->symbol) ? pFault->gate->hash->symbol : "";
 	snprintf(pcKey, iKeySize, "%s|%d|%d", pcGateName, pFault->line, pFault->type);
+}
+
+static int get_fault_group_id(FAULTPTR pFault)
+{
+	GATEPTR pSite = get_fault_site(pFault);
+#ifdef INCLUDE_HOPE
+	if (pSite->stemIndex >= 0)
+	{
+		return(pSite->stemIndex);
+	}
+	if (pFault->gate->stemIndex >= 0)
+	{
+		return(pFault->gate->stemIndex);
+	}
+#endif
+	return(pSite->index);
+}
+
+static void initialize_fault_group_features(int iNoFault)
+{
+	int i;
+	int *piGroupSizes = (int *)calloc((unsigned)(g_iNoGate + 1), sizeof(int));
+	if (piGroupSizes == NULL)
+	{
+		return;
+	}
+	for (i = 0; i < iNoFault; i++)
+	{
+		int iGroupId = get_fault_group_id(g_pFaultList[i]);
+		if (iGroupId < 0 || iGroupId > g_iNoGate)
+		{
+			iGroupId = get_fault_site(g_pFaultList[i])->index;
+		}
+		g_pFaultList[i]->history_group_id = iGroupId;
+		piGroupSizes[iGroupId]++;
+	}
+	for (i = 0; i < iNoFault; i++)
+	{
+		int iGroupId = g_pFaultList[i]->history_group_id;
+		g_pFaultList[i]->history_group_size = piGroupSizes[iGroupId];
+	}
+	free(piGroupSizes);
 }
 
 static int extract_json_string(const char *pcObject, const char *pcField, char *pcValue, int iValueSize)
@@ -285,7 +333,12 @@ static HISTORYENTRY *find_history_entry(HISTORYENTRY *pEntries, int iNoEntries, 
 	HISTORYENTRY cNeedle;
 	snprintf(cNeedle.key, sizeof(cNeedle.key), "%s", pcKey);
 	cNeedle.score = 0.0;
+	cNeedle.group_score = 0.0;
+	cNeedle.wait_score = 0.0;
+	cNeedle.representative_score = 0.0;
 	cNeedle.budget = 0;
+	cNeedle.group_budget = 0;
+	cNeedle.group_size = 0;
 	return((HISTORYENTRY *)bsearch(&cNeedle, pEntries, iNoEntries, sizeof(HISTORYENTRY), compare_history_entry_key));
 }
 
@@ -295,7 +348,11 @@ static void reset_fault_history_profile(int iNoFault)
 	for (i = 0; i < iNoFault; i++)
 	{
 		g_pFaultList[i]->history_score = 0.0;
+		g_pFaultList[i]->history_group_score = 0.0;
+		g_pFaultList[i]->history_wait_score = 0.0;
+		g_pFaultList[i]->history_representative_score = 0.0;
 		g_pFaultList[i]->history_backtrack_budget = 0;
+		g_pFaultList[i]->history_group_budget = 0;
 	}
 }
 
@@ -338,11 +395,21 @@ static void load_fault_history_profile(int iNoFault)
 	{
 		char pcKey[MAXSTRING];
 		double lfScore = 0.0;
+		double lfGroupScore = 0.0;
+		double lfWaitScore = 0.0;
+		double lfRepresentativeScore = 0.0;
 		int iBudget = 0;
+		int iGroupBudget = 0;
+		int iGroupSize = 0;
 		if (extract_json_string(pcObject, "key", pcKey, sizeof(pcKey)))
 		{
 			extract_json_double(pcObject, "score", &lfScore);
+			extract_json_double(pcObject, "group_score", &lfGroupScore);
+			extract_json_double(pcObject, "wait_score", &lfWaitScore);
+			extract_json_double(pcObject, "representative_fault_score", &lfRepresentativeScore);
 			extract_json_int(pcObject, "backtrack_budget", &iBudget);
+			extract_json_int(pcObject, "group_budget", &iGroupBudget);
+			extract_json_int(pcObject, "group_size", &iGroupSize);
 			if (iNoEntries >= iEntryCapacity)
 			{
 				iEntryCapacity = (iEntryCapacity == 0) ? 1024 : iEntryCapacity * 2;
@@ -354,7 +421,12 @@ static void load_fault_history_profile(int iNoFault)
 			}
 			snprintf(pEntries[iNoEntries].key, sizeof(pEntries[iNoEntries].key), "%s", pcKey);
 			pEntries[iNoEntries].score = lfScore;
+			pEntries[iNoEntries].group_score = lfGroupScore;
+			pEntries[iNoEntries].wait_score = lfWaitScore;
+			pEntries[iNoEntries].representative_score = lfRepresentativeScore;
 			pEntries[iNoEntries].budget = iBudget;
+			pEntries[iNoEntries].group_budget = iGroupBudget;
+			pEntries[iNoEntries].group_size = iGroupSize;
 			iNoEntries++;
 		}
 		pcObject += 7;
@@ -372,7 +444,15 @@ static void load_fault_history_profile(int iNoFault)
 			if (pEntry != NULL)
 			{
 				g_pFaultList[i]->history_score = pEntry->score;
+				g_pFaultList[i]->history_group_score = pEntry->group_score;
+				g_pFaultList[i]->history_wait_score = pEntry->wait_score;
+				g_pFaultList[i]->history_representative_score = pEntry->representative_score;
 				g_pFaultList[i]->history_backtrack_budget = pEntry->budget;
+				g_pFaultList[i]->history_group_budget = pEntry->group_budget;
+				if (pEntry->group_size > 0)
+				{
+					g_pFaultList[i]->history_group_size = pEntry->group_size;
+				}
 				iLoaded++;
 			}
 		}
@@ -400,7 +480,12 @@ static long get_fault_priority(FAULTPTR pFault)
 	if (strcmp(g_strFaultOrderMode, "history") == 0)
 	{
 		int iStemLike = (pGate->outCount > 1 || pSite->outCount > 1);
-		return((long)(pFault->history_score * 1000.0) + (long)iStemLike * 100L);
+		return((long)(pFault->history_group_score * 1000000.0) +
+			(long)(pFault->history_representative_score * 100000.0) +
+			(long)(pFault->history_score * 1000.0) -
+			(long)(pFault->history_wait_score * 100000.0) +
+			(long)pFault->history_group_size * 10L +
+			(long)iStemLike * 100L);
 	}
 	return(0L);
 }
@@ -595,7 +680,7 @@ int main(int argc, char *argv[]) //for windows
 		exit(0);
 	}
 	fprintf(g_fpFaultTraceFile,
-		"phase,selection_order,fault_index,fault_gate,fault_site,line,stuck_at,gate_dpi,gate_dpo,site_dpi,site_dpo,is_stem,is_fanout,fanout_count,fanin_count,site_fanout_count,site_fanin_count,gate_cont0,gate_cont1,site_cont0,site_cont1,result,fan_state,backtracks,backtrack_budget,fan_runtime,generated_pattern_index,pattern_detected_faults,pattern_extra_drops,compaction_origin_key\n");
+		"phase,selection_order,fault_index,fault_gate,fault_site,line,stuck_at,fault_group_id,fault_group_size,gate_dpi,gate_dpo,site_dpi,site_dpo,is_stem,is_fanout,fanout_count,fanin_count,site_fanout_count,site_fanin_count,gate_cont0,gate_cont1,site_cont0,site_cont1,result,fan_state,backtracks,backtrack_budget,fan_runtime,generated_pattern_index,pattern_detected_faults,pattern_extra_drops,compaction_origin_key\n");
 
 	strcpy(g_strPatternTraceFileName, g_strTestFileName);
 	strcat(g_strPatternTraceFileName, ".patterntrace.csv");
@@ -606,6 +691,16 @@ int main(int argc, char *argv[]) //for windows
 	}
 	fprintf(g_fpPatternTraceFile,
 		"engine,compaction_mode,shuffle_round,compacted_pattern_index,origin_pattern_index,detected_faults,retained\n");
+
+	strcpy(g_strDropTraceFileName, g_strTestFileName);
+	strcat(g_strDropTraceFileName, ".droptrace.csv");
+	if ((g_fpDropTraceFile = fopen(g_strDropTraceFileName, "w")) == NULL)
+	{
+		fprintf(stderr, "Fatal error: %s file open error\n", g_strDropTraceFileName);
+		exit(0);
+	}
+	fprintf(g_fpDropTraceFile,
+		"target_pattern_index,target_fault_key,target_group_id,target_group_size,dropped_fault_key,dropped_group_id,dropped_group_size,dropped_is_target_group\n");
 
 	if (logmode == 'y')
 	{
@@ -796,6 +891,7 @@ int main(int argc, char *argv[]) //for windows
 	}
 
 	setGateTestability(g_iNoGate);
+	initialize_fault_group_features(g_iNoFault);
 	apply_fault_ordering(g_iNoFault);
 
 	for (i = 0; i < g_iNoGate; i++)
@@ -1030,6 +1126,7 @@ int main(int argc, char *argv[]) //for windows
 	fclose(g_fpTestFile);
 	fclose(g_fpFaultTraceFile);
 	fclose(g_fpPatternTraceFile);
+	fclose(g_fpDropTraceFile);
 	if (logmode == 'y')
 	{
 		fclose(g_fpLogFile);
